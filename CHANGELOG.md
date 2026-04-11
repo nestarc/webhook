@@ -1,0 +1,79 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.2.0] - 2026-04-11
+
+### Added
+
+- **Ports/adapters architecture** — all services depend on port interfaces (`WebhookEventRepository`, `WebhookEndpointRepository`, `WebhookDeliveryRepository`, `WebhookHttpClient`) instead of Prisma directly. Default Prisma and fetch adapters are provided.
+- **Custom adapter injection** — `WebhookModuleOptions` accepts `eventRepository`, `endpointRepository`, `deliveryRepository`, `httpClient` to replace defaults.
+- **`WebhookEndpointAdminService`** — endpoint CRUD + test events (split from `WebhookAdminService`).
+- **`WebhookDeliveryAdminService`** — delivery logs + manual retry (split from `WebhookAdminService`).
+- **`WebhookDispatcher`** — signing + HTTP dispatch extracted from delivery worker.
+- **`WebhookRetryPolicy`** — backoff calculation extracted from delivery worker.
+- **Dispatch-time DNS validation** — `resolveAndValidateHost()` prevents DNS rebinding SSRF by validating resolved IPs before every POST, not only at registration.
+- **IPv4-mapped IPv6 detection** — blocks `::ffff:10.0.0.1` style bypass in both literal and hex-normalized forms.
+- **Async DNS resolution at registration** — hostnames like `*.nip.io` resolving to private IPs are rejected.
+- **HTTP redirect blocking** — `FetchHttpClient` uses `redirect: 'manual'` to prevent SSRF via 3xx.
+- **`allowPrivateUrls` option** — permits private/internal URLs for development and testing environments.
+- **Stale SENDING lease recovery** — `claimed_at` column tracks when a delivery was claimed; stale recovery uses lease expiry instead of `next_attempt_at`.
+- **`polling.staleSendingMinutes` option** — configures the stale delivery reaper threshold (default: 5 minutes).
+- **Bounded exception retries** — dispatch/persistence exceptions increment `attempts` and apply backoff instead of blindly resetting to PENDING.
+- **Post-persist state isolation** — circuit breaker failures after `markSent`/`markFailed` no longer revert delivery state.
+- **`WebhookEvent` LSP guard** — throws immediately if a subclass omits `static readonly eventType`.
+- **Secret exposure prevention** — `EndpointRecord` excludes `secret`; only `createEndpoint` returns `EndpointRecordWithSecret`.
+- **`pgcrypto` extension** — migration SQL includes `CREATE EXTENSION IF NOT EXISTS pgcrypto` for PostgreSQL < 13.
+- **CI/CD** — GitHub Actions CI (lint → test matrix → pack) and Release (verify → build → npm publish with OIDC provenance).
+- **`EndpointRecordWithSecret` type** — typed internal record for contexts that need the signing secret.
+- **`resolveAndValidateHost` export** — reusable DNS validation function.
+
+### Changed
+
+- **BREAKING:** `WebhookAdminService` is deprecated. Use `WebhookEndpointAdminService` and `WebhookDeliveryAdminService` instead. The facade will be removed in v0.3.0.
+- **BREAKING:** `EndpointRecord` no longer includes `secret`. Use `EndpointRecordWithSecret` for creation responses.
+- **BREAKING:** `WebhookModuleOptions.prisma` is now optional (not needed if all custom repositories are provided).
+- `WebhookDeliveryWorker` reduced from 280 lines / 7 responsibilities to a thin orchestrator.
+- `WebhookCircuitBreaker` depends on `WebhookEndpointRepository` port instead of Prisma directly.
+- `WebhookService` depends on three repository ports instead of raw Prisma.
+- All `SELECT *` / `RETURNING *` queries replaced with explicit column aliases for correct camelCase mapping.
+- `validateWebhookUrl` is now async (performs DNS resolution).
+
+### Removed
+
+- `resetToPending()` from `WebhookDeliveryRepository` — replaced by bounded retry accounting in catch paths.
+- `SigningOptions` interface and `signing` config field — HMAC-SHA256 with Standard Webhooks headers is fixed.
+
+### Fixed
+
+- Endpoint records returned snake_case fields (`tenant_id`, `consecutive_failures`) instead of camelCase (`tenantId`, `consecutiveFailures`).
+- Delivery log records returned snake_case fields (`event_id`, `endpoint_id`, `max_attempts`) instead of camelCase.
+- Circuit breaker recovery only ran when pending deliveries existed — now runs every poll cycle.
+- Poll cycles could overlap via `setInterval` — `isPolling` guard prevents concurrent execution.
+- Event save and delivery creation were not atomic — wrapped in `$transaction()`.
+- Exception path reset deliveries to PENDING without incrementing attempts — enabled unbounded retry loops.
+- `markSent()` success followed by `afterDelivery()` failure reverted delivery to PENDING — caused duplicate sends.
+
+## [0.1.0] - 2026-04-11
+
+### Added
+
+- `WebhookModule` with `forRoot()` and `forRootAsync()` registration.
+- `WebhookEvent` abstract base class with `static eventType` and `toPayload()`.
+- `WebhookService` with `send()` and `sendToTenant()` for event fan-out.
+- `WebhookDeliveryWorker` with polling-based async delivery.
+- HMAC-SHA256 signing compatible with Standard Webhooks headers.
+- Exponential backoff retry (30s → 5m → 30m → 2h → 24h) with jitter.
+- Circuit breaker with auto-disable and cooldown-based recovery.
+- Dead letter queue (FAILED status after max retries).
+- `WebhookAdminService` for endpoint CRUD, delivery logs, manual retry, test events.
+- `FOR UPDATE SKIP LOCKED` for multi-instance safe delivery claiming.
+- Graceful shutdown with active delivery drain.
+- PostgreSQL migration SQL for 3 tables.
+- Base64 secret validation (minimum 16 bytes).
+
+[0.2.0]: https://github.com/nestarc/webhook/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/nestarc/webhook/releases/tag/v0.1.0

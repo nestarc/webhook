@@ -4,6 +4,8 @@ Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circui
 
 **No separate infrastructure required.** Uses your existing PostgreSQL database.
 
+[![CI](https://github.com/nestarc/webhook/actions/workflows/ci.yml/badge.svg)](https://github.com/nestarc/webhook/actions/workflows/ci.yml)
+
 ## Features
 
 - **Fan-out delivery** — one event to many endpoints
@@ -14,6 +16,9 @@ Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circui
 - **Delivery logs** — full audit trail (status code, latency, response body)
 - **Multi-instance safe** — `FOR UPDATE SKIP LOCKED` prevents duplicate delivery
 - **Graceful shutdown** — waits for in-flight deliveries on process exit
+- **SSRF defense** — DNS resolution validation at registration and dispatch time
+- **Ports/adapters architecture** — swap Prisma or fetch with custom implementations
+- **Stale delivery recovery** — lease-based reaper recovers crashed worker deliveries
 
 ## Installation
 
@@ -37,6 +42,8 @@ psql -d your_database -f node_modules/@nestarc/webhook/src/sql/create-webhook-ta
 
 This creates three tables: `webhook_endpoints`, `webhook_events`, `webhook_deliveries`.
 
+The migration includes `CREATE EXTENSION IF NOT EXISTS pgcrypto` for PostgreSQL < 13 compatibility.
+
 ## Quick Start
 
 ### 1. Register the module
@@ -47,7 +54,7 @@ import { WebhookModule } from '@nestarc/webhook';
 @Module({
   imports: [
     WebhookModule.forRoot({
-      prisma: prismaService, // your PrismaClient instance
+      prisma: prismaService,
       delivery: {
         timeout: 10_000,
         maxRetries: 5,
@@ -85,6 +92,8 @@ export class OrderCreatedEvent extends WebhookEvent {
 }
 ```
 
+> **Note:** Subclasses **must** define `static readonly eventType`. The module throws at runtime if this is missing.
+
 ### 3. Send events
 
 ```typescript
@@ -105,17 +114,18 @@ export class OrderService {
 ### 4. Manage endpoints
 
 ```typescript
-import { WebhookAdminService } from '@nestarc/webhook';
+import { WebhookEndpointAdminService } from '@nestarc/webhook';
 
 @Injectable()
 export class WebhookController {
-  constructor(private readonly admin: WebhookAdminService) {}
+  constructor(private readonly endpointAdmin: WebhookEndpointAdminService) {}
 
   async register() {
-    return this.admin.createEndpoint({
+    // Secret is returned only on creation
+    return this.endpointAdmin.createEndpoint({
       url: 'https://customer.com/webhooks',
       events: ['order.created', 'order.paid'],
-      secret: 'auto', // auto-generate HMAC secret
+      secret: 'auto',
     });
   }
 }
@@ -130,18 +140,23 @@ export class WebhookController {
 | `send(event)` | Publish event to all matching endpoints |
 | `sendToTenant(tenantId, event)` | Publish to tenant-specific endpoints only |
 
-### WebhookAdminService
+### WebhookEndpointAdminService
 
 | Method | Description |
 |--------|-------------|
-| `createEndpoint(dto)` | Register a new webhook endpoint |
-| `listEndpoints(tenantId?)` | List all endpoints |
-| `getEndpoint(id)` | Get endpoint details |
+| `createEndpoint(dto)` | Register a new webhook endpoint (returns secret) |
+| `listEndpoints(tenantId?)` | List all endpoints (secret excluded) |
+| `getEndpoint(id)` | Get endpoint details (secret excluded) |
 | `updateEndpoint(id, dto)` | Update endpoint URL, events, etc. |
 | `deleteEndpoint(id)` | Delete an endpoint |
+| `sendTestEvent(endpointId)` | Send a `webhook.test` ping event |
+
+### WebhookDeliveryAdminService
+
+| Method | Description |
+|--------|-------------|
 | `getDeliveryLogs(endpointId, filters?)` | Query delivery history |
 | `retryDelivery(deliveryId)` | Manually retry a failed delivery |
-| `sendTestEvent(endpointId)` | Send a `webhook.test` ping event |
 
 ### WebhookSigner
 
@@ -151,11 +166,13 @@ export class WebhookController {
 | `verify(eventId, timestamp, body, secret, signature)` | Verify a webhook signature |
 | `generateSecret()` | Generate a random base64 signing secret |
 
+> **Deprecated:** `WebhookAdminService` is a facade that delegates to `WebhookEndpointAdminService` and `WebhookDeliveryAdminService`. It will be removed in v0.3.0.
+
 ## Configuration
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `prisma` | required | PrismaClient instance |
+| `prisma` | — | PrismaClient instance (required unless all custom repos provided) |
 | `delivery.timeout` | `10000` | HTTP request timeout (ms) |
 | `delivery.maxRetries` | `5` | Maximum delivery attempts |
 | `delivery.jitter` | `true` | Add random jitter to retry delays |
@@ -163,12 +180,24 @@ export class WebhookController {
 | `circuitBreaker.cooldownMinutes` | `60` | Minutes before attempting recovery |
 | `polling.interval` | `5000` | Delivery worker poll interval (ms) |
 | `polling.batchSize` | `50` | Max deliveries per poll cycle |
+| `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
+| `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 
-Signing uses **HMAC-SHA256** with [Standard Webhooks](https://www.standardwebhooks.com/) headers (fixed, not configurable).
+### Custom adapters
 
-**Secret format:** Secrets must be valid base64 strings that decode to at least 16 bytes. Use `"auto"` to let the module generate a cryptographically secure secret.
+Replace default Prisma or fetch implementations by providing custom ports:
 
-## Async Configuration
+```typescript
+WebhookModule.forRoot({
+  prisma: prismaService,
+  httpClient: myCustomHttpClient,          // implements WebhookHttpClient
+  eventRepository: myCustomEventRepo,      // implements WebhookEventRepository
+  endpointRepository: myCustomEndpointRepo,// implements WebhookEndpointRepository
+  deliveryRepository: myCustomDeliveryRepo,// implements WebhookDeliveryRepository
+});
+```
+
+### Async configuration
 
 ```typescript
 WebhookModule.forRootAsync({
@@ -183,6 +212,34 @@ WebhookModule.forRootAsync({
 });
 ```
 
+## Security
+
+### Signing
+
+All webhooks are signed with **HMAC-SHA256** using [Standard Webhooks](https://www.standardwebhooks.com/) headers:
+
+```
+webhook-id: <event-uuid>
+webhook-timestamp: <unix-seconds>
+webhook-signature: v1,<base64-hmac-sha256>
+```
+
+**Secret format:** Secrets must be valid base64 strings decoding to at least 16 bytes. Use `"auto"` for automatic generation.
+
+### SSRF defense
+
+- Endpoint URLs are validated at **registration** and at **every dispatch**
+- Blocks: private IPs, loopback, link-local, cloud metadata (169.254.x), IPv4-mapped IPv6
+- DNS resolution is checked to prevent rebinding attacks
+- HTTP redirects are disabled (`redirect: 'manual'`)
+- Use `allowPrivateUrls: true` for local development only
+
+### Secret handling
+
+- Signing secrets are excluded from read queries (`listEndpoints`, `getEndpoint`)
+- Secrets are only returned on `createEndpoint` (initial provisioning)
+- Delivery enrichment uses an internal path that does not expose secrets through admin APIs
+
 ## Webhook Payload Format
 
 ```json
@@ -195,13 +252,29 @@ WebhookModule.forRootAsync({
 }
 ```
 
-**Headers (Standard Webhooks):**
+## Architecture
 
 ```
-webhook-id: <event-uuid>
-webhook-timestamp: <unix-seconds>
-webhook-signature: v1,<base64-hmac-sha256>
+┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐
+│ Your Service │────>│  WebhookService  │────>│  PostgreSQL (tx)  │
+└─────────────┘     └──────────────────┘     └───────────────────┘
+                            │
+                    ┌───────┴────────┐
+                    │ DeliveryWorker │  (polls every N seconds)
+                    └───────┬────────┘
+                            │
+              ┌─────────────┼─────────────┐
+              v             v             v
+        ┌──────────┐ ┌──────────┐ ┌──────────┐
+        │Dispatcher│ │RetryPolicy│ │CircuitBkr│
+        └────┬─────┘ └──────────┘ └──────────┘
+             │
+        ┌────┴─────┐
+        │HttpClient│──> customer endpoints
+        └──────────┘
 ```
+
+All components depend on **port interfaces**, not concrete implementations. Default adapters use Prisma and Node.js fetch.
 
 ## License
 
