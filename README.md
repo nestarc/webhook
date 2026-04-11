@@ -48,9 +48,6 @@ import { WebhookModule } from '@nestarc/webhook';
   imports: [
     WebhookModule.forRoot({
       prisma: prismaService, // your PrismaClient instance
-      signing: {
-        algorithm: 'sha256',
-      },
       delivery: {
         timeout: 10_000,
         maxRetries: 5,
@@ -159,7 +156,6 @@ export class WebhookController {
 | Option | Default | Description |
 |--------|---------|-------------|
 | `prisma` | required | PrismaClient instance |
-| `signing.algorithm` | `'sha256'` | HMAC algorithm |
 | `delivery.timeout` | `10000` | HTTP request timeout (ms) |
 | `delivery.maxRetries` | `5` | Maximum delivery attempts |
 | `delivery.jitter` | `true` | Add random jitter to retry delays |
@@ -167,6 +163,10 @@ export class WebhookController {
 | `circuitBreaker.cooldownMinutes` | `60` | Minutes before attempting recovery |
 | `polling.interval` | `5000` | Delivery worker poll interval (ms) |
 | `polling.batchSize` | `50` | Max deliveries per poll cycle |
+
+Signing uses **HMAC-SHA256** with [Standard Webhooks](https://www.standardwebhooks.com/) headers (fixed, not configurable).
+
+**Secret format:** Secrets must be valid base64 strings that decode to at least 16 bytes. Use `"auto"` to let the module generate a cryptographically secure secret.
 
 ## Async Configuration
 

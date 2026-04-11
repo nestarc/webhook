@@ -26,10 +26,13 @@ export class WebhookAdminService {
   }
 
   async createEndpoint(dto: CreateEndpointDto): Promise<EndpointRecord> {
-    const secret =
-      !dto.secret || dto.secret === 'auto'
-        ? this.signer.generateSecret()
-        : dto.secret;
+    let secret: string;
+    if (!dto.secret || dto.secret === 'auto') {
+      secret = this.signer.generateSecret();
+    } else {
+      this.validateBase64Secret(dto.secret);
+      secret = dto.secret;
+    }
 
     const [endpoint] = await this.prisma.$queryRaw<EndpointRecord[]>`
       INSERT INTO webhook_endpoints (url, secret, events, description, metadata, tenant_id)
@@ -189,5 +192,23 @@ export class WebhookAdminService {
 
     this.logger.log(`Test event sent to endpoint ${endpointId}`);
     return event.id;
+  }
+
+  private validateBase64Secret(secret: string): void {
+    const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+    if (!base64Regex.test(secret) || secret.length === 0) {
+      throw new Error(
+        'Invalid secret: must be a valid base64-encoded string. ' +
+          'Use "auto" to generate one automatically.',
+      );
+    }
+    // Verify it decodes to at least 16 bytes for security
+    const decoded = Buffer.from(secret, 'base64');
+    if (decoded.length < 16) {
+      throw new Error(
+        'Invalid secret: decoded value must be at least 16 bytes. ' +
+          'Use "auto" to generate a secure secret.',
+      );
+    }
   }
 }

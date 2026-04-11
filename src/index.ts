@@ -10,7 +10,6 @@ export type {
   WebhookModuleOptions,
   WebhookModuleAsyncOptions,
   WebhookOptionsFactory,
-  SigningOptions,
   DeliveryOptions,
   CircuitBreakerOptions,
   PollingOptions,

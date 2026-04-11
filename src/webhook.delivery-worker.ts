@@ -34,6 +34,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
   private readonly batchSize: number;
   private readonly jitter: boolean;
   private isShuttingDown = false;
+  private isPolling = false;
   private activeDeliveries = 0;
 
   constructor(
@@ -50,8 +51,13 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
 
   async poll(): Promise<void> {
     if (this.isShuttingDown) return;
+    if (this.isPolling) return;
 
+    this.isPolling = true;
     try {
+      // Always attempt to recover disabled endpoints, regardless of pending deliveries
+      await this.circuitBreaker.recoverEligibleEndpoints();
+
       // Claim pending deliveries with FOR UPDATE SKIP LOCKED
       const deliveries = await this.prisma.$queryRaw<PendingDelivery[]>`
         UPDATE webhook_deliveries
@@ -81,11 +87,10 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       await Promise.all(
         enriched.map((delivery) => this.processDelivery(delivery)),
       );
-
-      // Periodically recover disabled endpoints
-      await this.circuitBreaker.recoverEligibleEndpoints();
     } catch (error) {
       this.logger.error(`Poll cycle failed: ${error}`);
+    } finally {
+      this.isPolling = false;
     }
   }
 

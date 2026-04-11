@@ -39,11 +39,12 @@ describe('WebhookDeliveryWorker', () => {
 
   describe('poll', () => {
     it('should do nothing when no pending deliveries', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([]);
+      prisma.$queryRaw.mockResolvedValueOnce([]); // claim query returns empty
 
       await worker.poll();
 
-      // Only the claim query should be called
+      // recover + claim query
+      expect(circuitBreaker.recoverEligibleEndpoints).toHaveBeenCalled();
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     });
 
@@ -161,6 +162,39 @@ describe('WebhookDeliveryWorker', () => {
         expect(delayMs).toBeGreaterThan(expectedMs - 100);
         expect(delayMs).toBeLessThan(expectedMs + 100);
       }
+    });
+  });
+
+  describe('recovery', () => {
+    it('should call recoverEligibleEndpoints even when no pending deliveries', async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([]); // no pending deliveries
+
+      await worker.poll();
+
+      expect(circuitBreaker.recoverEligibleEndpoints).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('concurrency guard', () => {
+    it('should not run concurrent polls', async () => {
+      // Make the first poll hang by never resolving the recovery call
+      let resolveRecovery!: () => void;
+      circuitBreaker.recoverEligibleEndpoints.mockReturnValueOnce(
+        new Promise<number>((resolve) => {
+          resolveRecovery = () => resolve(0);
+        }),
+      );
+
+      const poll1 = worker.poll();
+      // Second poll should skip because isPolling is true
+      await worker.poll();
+
+      // Only one recoverEligibleEndpoints call (from poll1)
+      expect(circuitBreaker.recoverEligibleEndpoints).toHaveBeenCalledTimes(1);
+
+      resolveRecovery();
+      prisma.$queryRaw.mockResolvedValueOnce([]); // no deliveries
+      await poll1;
     });
   });
 

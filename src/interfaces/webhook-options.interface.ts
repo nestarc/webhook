@@ -1,10 +1,5 @@
 import { ModuleMetadata, Type } from '@nestjs/common';
 
-export interface SigningOptions {
-  algorithm?: 'sha256';
-  headerName?: string;
-}
-
 export interface DeliveryOptions {
   timeout?: number;
   maxRetries?: number;
@@ -24,7 +19,6 @@ export interface PollingOptions {
 
 export interface WebhookModuleOptions {
   prisma: any;
-  signing?: SigningOptions;
   delivery?: DeliveryOptions;
   circuitBreaker?: CircuitBreakerOptions;
   polling?: PollingOptions;

@@ -41,11 +41,12 @@ describe('WebhookAdminService', () => {
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     });
 
-    it('should create endpoint with provided secret', async () => {
+    it('should create endpoint with provided valid base64 secret', async () => {
+      const validSecret = Buffer.from('a'.repeat(32)).toString('base64');
       const endpoint = {
         id: 'ep-2',
         url: 'https://example.com/hook',
-        secret: 'my-custom-secret',
+        secret: validSecret,
         events: ['*'],
         active: true,
       };
@@ -54,10 +55,31 @@ describe('WebhookAdminService', () => {
       const result = await admin.createEndpoint({
         url: 'https://example.com/hook',
         events: ['*'],
-        secret: 'my-custom-secret',
+        secret: validSecret,
       });
 
-      expect(result.secret).toBe('my-custom-secret');
+      expect(result.secret).toBe(validSecret);
+    });
+
+    it('should reject invalid base64 secret', async () => {
+      await expect(
+        admin.createEndpoint({
+          url: 'https://example.com/hook',
+          events: ['*'],
+          secret: '!!!not-base64!!!',
+        }),
+      ).rejects.toThrow('Invalid secret');
+    });
+
+    it('should reject secret that decodes to less than 16 bytes', async () => {
+      const shortSecret = Buffer.from('short').toString('base64'); // 5 bytes
+      await expect(
+        admin.createEndpoint({
+          url: 'https://example.com/hook',
+          events: ['*'],
+          secret: shortSecret,
+        }),
+      ).rejects.toThrow('at least 16 bytes');
     });
   });
 

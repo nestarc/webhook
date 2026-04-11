@@ -32,68 +32,60 @@ export class WebhookService {
     const eventType = event.eventType;
     const maxAttempts = this.options.delivery?.maxRetries ?? 5;
 
-    // 1. Save event
-    const [savedEvent] = await this.prisma.$queryRaw<
-      { id: string }[]
-    >`INSERT INTO webhook_events (event_type, payload, tenant_id)
-      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId ?? null})
-      RETURNING id`;
+    return this.prisma.$transaction(async (tx: any) => {
+      // 1. Save event
+      const [savedEvent] = await tx.$queryRaw<
+        { id: string }[]
+      >`INSERT INTO webhook_events (event_type, payload, tenant_id)
+        VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId ?? null})
+        RETURNING id`;
 
-    const eventId = savedEvent.id;
+      const eventId = savedEvent.id;
 
-    // 2. Find matching endpoints
-    const endpoints = await this.findMatchingEndpoints(eventType, tenantId);
+      // 2. Find matching endpoints
+      const endpoints = await this.findMatchingEndpoints(tx, eventType, tenantId);
 
-    if (endpoints.length === 0) {
-      this.logger.debug(
-        `No matching endpoints for event ${eventType} (eventId=${eventId})`,
+      if (endpoints.length === 0) {
+        this.logger.debug(
+          `No matching endpoints for event ${eventType} (eventId=${eventId})`,
+        );
+        return eventId;
+      }
+
+      // 3. Batch create delivery records (parameterized)
+      const endpointIds = endpoints.map((ep) => ep.id);
+      await tx.$executeRawUnsafe(
+        `INSERT INTO webhook_deliveries (event_id, endpoint_id, status, attempts, max_attempts, next_attempt_at)
+         SELECT $1::uuid, unnest($2::uuid[]), 'PENDING', 0, $3, NOW()`,
+        eventId,
+        endpointIds,
+        maxAttempts,
       );
+
+      this.logger.log(
+        `Event ${eventType} (${eventId}) → ${endpoints.length} endpoint(s)`,
+      );
+
       return eventId;
-    }
-
-    // 3. Batch create delivery records
-    await this.createDeliveries(eventId, endpoints, maxAttempts);
-
-    this.logger.log(
-      `Event ${eventType} (${eventId}) → ${endpoints.length} endpoint(s)`,
-    );
-
-    return eventId;
+    });
   }
 
   private async findMatchingEndpoints(
+    tx: any,
     eventType: string,
     tenantId: string | undefined,
   ): Promise<EndpointRecord[]> {
     if (tenantId !== undefined) {
-      return this.prisma.$queryRaw<EndpointRecord[]>`
+      return tx.$queryRaw<EndpointRecord[]>`
         SELECT * FROM webhook_endpoints
         WHERE active = true
           AND tenant_id = ${tenantId}
           AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
     }
 
-    return this.prisma.$queryRaw<EndpointRecord[]>`
+    return tx.$queryRaw<EndpointRecord[]>`
       SELECT * FROM webhook_endpoints
       WHERE active = true
         AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
-  }
-
-  private async createDeliveries(
-    eventId: string,
-    endpoints: EndpointRecord[],
-    maxAttempts: number,
-  ): Promise<void> {
-    const values = endpoints
-      .map(
-        (ep) =>
-          `('${eventId}'::uuid, '${ep.id}'::uuid, 'PENDING', 0, ${maxAttempts}, NOW())`,
-      )
-      .join(', ');
-
-    await this.prisma.$executeRawUnsafe(
-      `INSERT INTO webhook_deliveries (event_id, endpoint_id, status, attempts, max_attempts, next_attempt_at)
-       VALUES ${values}`,
-    );
   }
 }
