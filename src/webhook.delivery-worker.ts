@@ -110,7 +110,28 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       }
     } catch (error) {
       this.logger.error(`Delivery ${delivery.id} processing error: ${error}`);
-      await this.deliveryRepo.resetToPending(delivery.id);
+      // Increment attempts and apply backoff — never reset without accounting
+      try {
+        const newAttempts = delivery.attempts + 1;
+        const errorResult = {
+          success: false as const,
+          latencyMs: 0,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        if (newAttempts >= delivery.max_attempts) {
+          await this.deliveryRepo.markFailed(delivery.id, newAttempts, errorResult);
+          this.logger.warn(
+            `Delivery ${delivery.id} exhausted retries on exception (${newAttempts}/${delivery.max_attempts})`,
+          );
+        } else {
+          const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
+          await this.deliveryRepo.markRetry(delivery.id, newAttempts, nextAt, errorResult);
+        }
+      } catch (fallbackError) {
+        this.logger.error(
+          `Delivery ${delivery.id} fallback error handling failed: ${fallbackError}`,
+        );
+      }
     } finally {
       this.activeDeliveries--;
     }

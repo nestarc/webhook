@@ -129,7 +129,7 @@ describe('WebhookModule', () => {
               markSent: jest.fn(),
               markFailed: jest.fn(),
               markRetry: jest.fn(),
-              resetToPending: jest.fn(),
+              recoverStaleSending: jest.fn(),
               getDeliveryLogs: jest.fn(),
               retryDelivery: jest.fn(),
               createTestDelivery: jest.fn(),

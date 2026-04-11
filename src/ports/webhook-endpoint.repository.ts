@@ -1,5 +1,6 @@
 import {
   EndpointRecord,
+  EndpointRecordWithSecret,
   UpdateEndpointDto,
 } from '../interfaces/webhook-endpoint.interface';
 
@@ -22,7 +23,7 @@ export interface WebhookEndpointRepository {
     description: string | null,
     metadata: Record<string, unknown> | null,
     tenantId: string | null,
-  ): Promise<EndpointRecord>;
+  ): Promise<EndpointRecordWithSecret>;
 
   getEndpoint(id: string): Promise<EndpointRecord | null>;
   listEndpoints(tenantId?: string): Promise<EndpointRecord[]>;

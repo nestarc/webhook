@@ -2,10 +2,22 @@ import { Injectable } from '@nestjs/common';
 import { WebhookEndpointRepository } from '../ports/webhook-endpoint.repository';
 import {
   EndpointRecord,
+  EndpointRecordWithSecret,
   UpdateEndpointDto,
 } from '../interfaces/webhook-endpoint.interface';
 
+/** Public columns — excludes secret */
 const ENDPOINT_COLUMNS = `
+  id, url, events, active, description, metadata,
+  tenant_id AS "tenantId",
+  consecutive_failures AS "consecutiveFailures",
+  disabled_at AS "disabledAt",
+  disabled_reason AS "disabledReason",
+  created_at AS "createdAt",
+  updated_at AS "updatedAt"`;
+
+/** Internal columns — includes secret (for creation response only) */
+const ENDPOINT_COLUMNS_WITH_SECRET = `
   id, url, secret, events, active, description, metadata,
   tenant_id AS "tenantId",
   consecutive_failures AS "consecutiveFailures",
@@ -72,11 +84,11 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     description: string | null,
     metadata: Record<string, unknown> | null,
     tenantId: string | null,
-  ): Promise<EndpointRecord> {
-    const [endpoint]: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+  ): Promise<EndpointRecordWithSecret> {
+    const [endpoint]: EndpointRecordWithSecret[] = await this.prisma.$queryRawUnsafe(
       `INSERT INTO webhook_endpoints (url, secret, events, description, metadata, tenant_id)
        VALUES ($1, $2, $3::varchar[], $4, $5::jsonb, $6)
-       RETURNING ${ENDPOINT_COLUMNS}`,
+       RETURNING ${ENDPOINT_COLUMNS_WITH_SECRET}`,
       url,
       secret,
       events,

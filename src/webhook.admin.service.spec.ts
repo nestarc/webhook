@@ -8,7 +8,6 @@ function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
   return {
     id: 'ep-1',
     url: 'https://example.com/hook',
-    secret: 'generated-secret',
     events: ['order.created'],
     active: true,
     description: null,
@@ -79,7 +78,7 @@ describe('WebhookAdminService', () => {
 
   describe('createEndpoint', () => {
     it('should delegate to endpointAdmin.createEndpoint', async () => {
-      const endpoint = makeEndpoint();
+      const endpoint = { ...makeEndpoint(), secret: 'generated-secret' };
       endpointAdmin.createEndpoint.mockResolvedValueOnce(endpoint);
 
       const result = await admin.createEndpoint({

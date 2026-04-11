@@ -37,7 +37,7 @@ export async function validateWebhookUrl(url: string): Promise<void> {
     validateIPv6(cleanIp);
   } else {
     // Hostname — resolve DNS and validate all resolved IPs
-    await validateDnsResolution(hostname);
+    await resolveAndValidateHost(hostname);
   }
 }
 
@@ -107,7 +107,7 @@ function validateIPv6(ip: string): void {
   }
 }
 
-async function validateDnsResolution(hostname: string): Promise<void> {
+export async function resolveAndValidateHost(hostname: string): Promise<void> {
   let addresses: string[] = [];
 
   try {

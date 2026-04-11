@@ -36,7 +36,6 @@ function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
   return {
     id: 'ep-1',
     url: 'https://a.com/hook',
-    secret: 'sec1',
     events: ['test.created'],
     active: true,
     description: null,

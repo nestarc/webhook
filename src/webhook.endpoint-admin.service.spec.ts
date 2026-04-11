@@ -7,7 +7,7 @@ import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
 
 function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
   return {
-    id: 'ep-1', url: 'https://example.com/hook', secret: 'generated',
+    id: 'ep-1', url: 'https://example.com/hook',
     events: ['order.created'], active: true, description: null, metadata: null,
     tenantId: null, consecutiveFailures: 0, disabledAt: null, disabledReason: null,
     createdAt: new Date(), updatedAt: new Date(), ...overrides,
@@ -45,7 +45,7 @@ describe('WebhookEndpointAdminService', () => {
 
   describe('createEndpoint', () => {
     it('should auto-generate secret when "auto"', async () => {
-      mocks.endpointRepo.createEndpoint.mockResolvedValueOnce(makeEndpoint());
+      mocks.endpointRepo.createEndpoint.mockResolvedValueOnce({ ...makeEndpoint(), secret: 'auto-generated' });
 
       await service.createEndpoint({
         url: 'https://example.com', events: ['*'], secret: 'auto',
@@ -59,7 +59,7 @@ describe('WebhookEndpointAdminService', () => {
     it('should use provided valid secret', async () => {
       const validSecret = Buffer.from('a'.repeat(32)).toString('base64');
       mocks.endpointRepo.createEndpoint.mockResolvedValueOnce(
-        makeEndpoint({ secret: validSecret }),
+        { ...makeEndpoint(), secret: validSecret },
       );
 
       await service.createEndpoint({

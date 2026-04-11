@@ -44,6 +44,7 @@ export type {
 // Record types
 export type {
   EndpointRecord,
+  EndpointRecordWithSecret,
   CreateEndpointDto,
   UpdateEndpointDto,
 } from './interfaces/webhook-endpoint.interface';
@@ -73,4 +74,4 @@ export {
   DEFAULT_STALE_SENDING_MINUTES,
 } from './webhook.constants';
 
-export { validateWebhookUrl } from './webhook.url-validator';
+export { validateWebhookUrl, resolveAndValidateHost } from './webhook.url-validator';

@@ -4,6 +4,7 @@ import { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
 import {
   CreateEndpointDto,
   EndpointRecord,
+  EndpointRecordWithSecret,
   UpdateEndpointDto,
 } from './interfaces/webhook-endpoint.interface';
 import {
@@ -22,7 +23,7 @@ export class WebhookAdminService {
     private readonly deliveries: WebhookDeliveryAdminService,
   ) {}
 
-  async createEndpoint(dto: CreateEndpointDto): Promise<EndpointRecord> {
+  async createEndpoint(dto: CreateEndpointDto): Promise<EndpointRecordWithSecret> {
     return this.endpoints.createEndpoint(dto);
   }
 

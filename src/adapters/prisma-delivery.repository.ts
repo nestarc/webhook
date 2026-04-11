@@ -35,7 +35,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
   async claimPendingDeliveries(batchSize: number): Promise<PendingDelivery[]> {
     return this.prisma.$queryRaw<PendingDelivery[]>`
       UPDATE webhook_deliveries
-      SET status = 'SENDING'
+      SET status = 'SENDING', claimed_at = NOW()
       WHERE id IN (
         SELECT d.id
         FROM webhook_deliveries d
@@ -105,20 +105,14 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       WHERE id = ${deliveryId}::uuid`;
   }
 
-  async resetToPending(deliveryId: string): Promise<void> {
-    await this.prisma.$executeRaw`
-      UPDATE webhook_deliveries
-      SET status = 'PENDING'
-      WHERE id = ${deliveryId}::uuid`;
-  }
-
   async recoverStaleSending(stalenessMinutes: number): Promise<number> {
     const interval = `${stalenessMinutes} minutes`;
     const recovered = await this.prisma.$queryRaw<{ id: string }[]>`
       UPDATE webhook_deliveries
-      SET status = 'PENDING'
+      SET status = 'PENDING', claimed_at = NULL
       WHERE status = 'SENDING'
-        AND next_attempt_at + ${interval}::interval < NOW()
+        AND claimed_at IS NOT NULL
+        AND claimed_at + ${interval}::interval < NOW()
       RETURNING id`;
     return recovered.length;
   }

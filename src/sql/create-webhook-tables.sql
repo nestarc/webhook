@@ -2,6 +2,9 @@
 -- Creates the three core tables for outbound webhook delivery.
 -- Run this migration against your PostgreSQL database before using the module.
 
+-- Required for gen_random_uuid() on PostgreSQL < 13
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id                   UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
   url                  VARCHAR(2048) NOT NULL,
@@ -48,6 +51,7 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   attempts        INT          NOT NULL DEFAULT 0,
   max_attempts    INT          NOT NULL DEFAULT 5,
   next_attempt_at TIMESTAMPTZ,
+  claimed_at      TIMESTAMPTZ,
   last_attempt_at TIMESTAMPTZ,
   completed_at    TIMESTAMPTZ,
 

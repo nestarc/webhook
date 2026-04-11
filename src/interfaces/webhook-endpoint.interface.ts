@@ -1,7 +1,6 @@
 export interface EndpointRecord {
   id: string;
   url: string;
-  secret: string;
   events: string[];
   active: boolean;
   description: string | null;
@@ -12,6 +11,11 @@ export interface EndpointRecord {
   disabledReason: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** Internal record that includes the signing secret. Only used for endpoint creation response and delivery enrichment. */
+export interface EndpointRecordWithSecret extends EndpointRecord {
+  secret: string;
 }
 
 export interface CreateEndpointDto {

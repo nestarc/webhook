@@ -32,7 +32,6 @@ export interface WebhookDeliveryRepository {
   markSent(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void>;
   markFailed(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void>;
   markRetry(deliveryId: string, attempts: number, nextAt: Date, result: DeliveryResult): Promise<void>;
-  resetToPending(deliveryId: string): Promise<void>;
 
   recoverStaleSending(stalenessMinutes: number): Promise<number>;
   getDeliveryLogs(endpointId: string, filters?: DeliveryLogFilters): Promise<DeliveryRecord[]>;

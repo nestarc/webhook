@@ -13,6 +13,7 @@ import { WebhookDeliveryRepository } from './ports/webhook-delivery.repository';
 import {
   CreateEndpointDto,
   EndpointRecord,
+  EndpointRecordWithSecret,
   UpdateEndpointDto,
 } from './interfaces/webhook-endpoint.interface';
 import { validateWebhookUrl } from './webhook.url-validator';
@@ -36,7 +37,7 @@ export class WebhookEndpointAdminService {
     this.allowPrivateUrls = options.allowPrivateUrls ?? false;
   }
 
-  async createEndpoint(dto: CreateEndpointDto): Promise<EndpointRecord> {
+  async createEndpoint(dto: CreateEndpointDto): Promise<EndpointRecordWithSecret> {
     if (!this.allowPrivateUrls) {
       await validateWebhookUrl(dto.url);
     }
