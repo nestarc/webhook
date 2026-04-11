@@ -1,6 +1,6 @@
 {
   "name": "@nestarc/webhook",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circuit breaker, delivery logs, fan-out, Standard Webhooks compatible",
   "author": "nestarc",
   "license": "MIT",
