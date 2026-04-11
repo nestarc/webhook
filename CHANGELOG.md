@@ -5,21 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-04-11
+## [0.4.0] - 2026-04-11
 
 ### Added
 
-- **`sendToEndpoints(endpointIds, event)`** — send events to specific endpoint IDs instead of fan-out to all matching endpoints. Useful for SaaS platforms where API consumers specify which endpoints should receive a particular event.
 - **`WebhookSecretVault` port** — new port interface for encrypting/decrypting endpoint signing secrets at rest. Implement this to provide custom encryption (e.g. AES-256-GCM).
 - **`PlaintextSecretVault` adapter** — default no-op vault that passes secrets through unchanged. Maintains backward compatibility when no vault is configured.
 - **`secretVault` module option** — `WebhookModuleOptions` accepts an optional `secretVault` to replace the default plaintext vault.
 - **`status` CHECK constraint** — `webhook_deliveries.status` column now includes a CHECK constraint limiting values to `PENDING`, `SENDING`, `SENT`, `FAILED` in the official schema.
-- **`tenant_id::text` cast** — raw SQL queries now cast `tenant_id::text` for comparison, enabling future UUID FK migration without breaking existing text-based tenant IDs.
+- **`tenant_id::text` cast** — SELECT queries now cast `tenant_id::text` for comparison, enabling future UUID FK migration without breaking existing text-based tenant IDs.
+- **`tenant_id::uuid` cast** — INSERT queries now cast `tenant_id::uuid`, allowing `tenant_id` columns of UUID type (e.g. FK to `applications.id`).
 
 ### Changed
 
 - `PrismaEndpointRepository` constructor accepts an optional `WebhookSecretVault` parameter; `createEndpoint()` encrypts the secret before storage.
 - `PrismaDeliveryRepository` constructor accepts an optional `WebhookSecretVault` parameter; `enrichDeliveries()` decrypts secrets after retrieval.
+
+## [0.3.0] - 2026-04-11
+
+### Added
+
+- **`sendToEndpoints(endpointIds, event)`** — send events to specific endpoint IDs instead of fan-out to all matching endpoints. Useful for SaaS platforms where API consumers specify which endpoints should receive a particular event.
 
 ## [0.2.0] - 2026-04-11
 
@@ -91,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
+[0.4.0]: https://github.com/nestarc/webhook/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nestarc/webhook/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nestarc/webhook/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nestarc/webhook/releases/tag/v0.1.0
