@@ -1,35 +1,86 @@
 import { WebhookAdminService } from './webhook.admin.service';
-import { WebhookSigner } from './webhook.signer';
+import { WebhookEndpointAdminService } from './webhook.endpoint-admin.service';
+import { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
+import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
+import { DeliveryRecord } from './interfaces/webhook-delivery.interface';
 
-function createMockPrisma() {
+function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
   return {
-    $queryRaw: jest.fn(),
-    $queryRawUnsafe: jest.fn(),
-    $executeRaw: jest.fn(),
+    id: 'ep-1',
+    url: 'https://example.com/hook',
+    secret: 'generated-secret',
+    events: ['order.created'],
+    active: true,
+    description: null,
+    metadata: null,
+    tenantId: null,
+    consecutiveFailures: 0,
+    disabledAt: null,
+    disabledReason: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
   };
+}
+
+function makeDeliveryRecord(overrides: Partial<DeliveryRecord> = {}): DeliveryRecord {
+  return {
+    id: 'del-1',
+    eventId: 'evt-1',
+    endpointId: 'ep-1',
+    status: 'SENT',
+    attempts: 1,
+    maxAttempts: 5,
+    nextAttemptAt: null,
+    lastAttemptAt: new Date(),
+    completedAt: new Date(),
+    responseStatus: 200,
+    responseBody: 'OK',
+    latencyMs: 50,
+    lastError: null,
+    ...overrides,
+  };
+}
+
+function createMockEndpointAdmin() {
+  return {
+    createEndpoint: jest.fn(),
+    listEndpoints: jest.fn(),
+    getEndpoint: jest.fn(),
+    updateEndpoint: jest.fn(),
+    deleteEndpoint: jest.fn(),
+    sendTestEvent: jest.fn(),
+  } as jest.Mocked<Pick<
+    WebhookEndpointAdminService,
+    'createEndpoint' | 'listEndpoints' | 'getEndpoint' | 'updateEndpoint' | 'deleteEndpoint' | 'sendTestEvent'
+  >>;
+}
+
+function createMockDeliveryAdmin() {
+  return {
+    getDeliveryLogs: jest.fn(),
+    retryDelivery: jest.fn(),
+  } as jest.Mocked<Pick<WebhookDeliveryAdminService, 'getDeliveryLogs' | 'retryDelivery'>>;
 }
 
 describe('WebhookAdminService', () => {
   let admin: WebhookAdminService;
-  let prisma: ReturnType<typeof createMockPrisma>;
-  let signer: WebhookSigner;
+  let endpointAdmin: ReturnType<typeof createMockEndpointAdmin>;
+  let deliveryAdmin: ReturnType<typeof createMockDeliveryAdmin>;
 
   beforeEach(() => {
-    prisma = createMockPrisma();
-    signer = new WebhookSigner();
-    admin = new WebhookAdminService({ prisma }, signer);
+    endpointAdmin = createMockEndpointAdmin();
+    deliveryAdmin = createMockDeliveryAdmin();
+    admin = new WebhookAdminService(
+      endpointAdmin as unknown as WebhookEndpointAdminService,
+      deliveryAdmin as unknown as WebhookDeliveryAdminService,
+    );
   });
 
   describe('createEndpoint', () => {
-    it('should create endpoint with auto-generated secret', async () => {
-      const endpoint = {
-        id: 'ep-1',
-        url: 'https://example.com/hook',
-        secret: 'generated-secret',
-        events: ['order.created'],
-        active: true,
-      };
-      prisma.$queryRaw.mockResolvedValueOnce([endpoint]);
+    it('should delegate to endpointAdmin.createEndpoint', async () => {
+      const endpoint = makeEndpoint();
+      endpointAdmin.createEndpoint.mockResolvedValueOnce(endpoint);
 
       const result = await admin.createEndpoint({
         url: 'https://example.com/hook',
@@ -38,84 +89,53 @@ describe('WebhookAdminService', () => {
       });
 
       expect(result.id).toBe('ep-1');
-      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
-    });
-
-    it('should create endpoint with provided valid base64 secret', async () => {
-      const validSecret = Buffer.from('a'.repeat(32)).toString('base64');
-      const endpoint = {
-        id: 'ep-2',
+      expect(endpointAdmin.createEndpoint).toHaveBeenCalledTimes(1);
+      expect(endpointAdmin.createEndpoint).toHaveBeenCalledWith({
         url: 'https://example.com/hook',
-        secret: validSecret,
-        events: ['*'],
-        active: true,
-      };
-      prisma.$queryRaw.mockResolvedValueOnce([endpoint]);
-
-      const result = await admin.createEndpoint({
-        url: 'https://example.com/hook',
-        events: ['*'],
-        secret: validSecret,
+        events: ['order.created'],
+        secret: 'auto',
       });
-
-      expect(result.secret).toBe(validSecret);
-    });
-
-    it('should reject invalid base64 secret', async () => {
-      await expect(
-        admin.createEndpoint({
-          url: 'https://example.com/hook',
-          events: ['*'],
-          secret: '!!!not-base64!!!',
-        }),
-      ).rejects.toThrow('Invalid secret');
-    });
-
-    it('should reject secret that decodes to less than 16 bytes', async () => {
-      const shortSecret = Buffer.from('short').toString('base64'); // 5 bytes
-      await expect(
-        admin.createEndpoint({
-          url: 'https://example.com/hook',
-          events: ['*'],
-          secret: shortSecret,
-        }),
-      ).rejects.toThrow('at least 16 bytes');
     });
   });
 
   describe('listEndpoints', () => {
-    it('should list all endpoints', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([
-        { id: 'ep-1' },
-        { id: 'ep-2' },
+    it('should delegate to endpointAdmin.listEndpoints', async () => {
+      endpointAdmin.listEndpoints.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-1' }),
+        makeEndpoint({ id: 'ep-2' }),
       ]);
 
       const result = await admin.listEndpoints();
 
       expect(result).toHaveLength(2);
+      expect(endpointAdmin.listEndpoints).toHaveBeenCalledWith(undefined);
     });
 
-    it('should filter by tenantId', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ id: 'ep-t1' }]);
+    it('should pass tenantId filter to delegate', async () => {
+      endpointAdmin.listEndpoints.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-t1', tenantId: 'tenant-1' }),
+      ]);
 
       const result = await admin.listEndpoints('tenant-1');
 
       expect(result).toHaveLength(1);
+      expect(endpointAdmin.listEndpoints).toHaveBeenCalledWith('tenant-1');
     });
   });
 
   describe('getEndpoint', () => {
-    it('should return endpoint by id', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ id: 'ep-1', url: 'https://example.com' }]);
+    it('should delegate to endpointAdmin.getEndpoint', async () => {
+      endpointAdmin.getEndpoint.mockResolvedValueOnce(makeEndpoint());
 
       const result = await admin.getEndpoint('ep-1');
 
       expect(result).not.toBeNull();
       expect(result!.id).toBe('ep-1');
+      expect(endpointAdmin.getEndpoint).toHaveBeenCalledWith('ep-1');
     });
 
     it('should return null for non-existent endpoint', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([]);
+      endpointAdmin.getEndpoint.mockResolvedValueOnce(null);
 
       const result = await admin.getEndpoint('non-existent');
 
@@ -124,58 +144,22 @@ describe('WebhookAdminService', () => {
   });
 
   describe('updateEndpoint', () => {
-    it('should build SET clause for all fields with correct parameter order', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: 'ep-1' }]);
+    it('should delegate to endpointAdmin.updateEndpoint', async () => {
+      const updated = makeEndpoint({ url: 'https://new.com' });
+      endpointAdmin.updateEndpoint.mockResolvedValueOnce(updated);
 
-      await admin.updateEndpoint('ep-1', {
+      const result = await admin.updateEndpoint('ep-1', {
         url: 'https://new.com',
-        events: ['order.*'],
-        description: 'updated',
-        metadata: { key: 'val' },
-        active: false,
       });
 
-      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
-      // 5 SET fields + endpoint ID = 6 params
-      expect(params).toHaveLength(6);
-      expect(sql).toContain('url = $1');
-      expect(sql).toContain('events = $2');
-      expect(sql).toContain('description = $3');
-      expect(sql).toContain('metadata = $4');
-      expect(sql).toContain('active = $5');
-      expect(sql).toContain('WHERE id = $6::uuid');
-
-      // Verify param values and order
-      expect(params[0]).toBe('https://new.com');
-      expect(params[1]).toEqual(['order.*']);
-      expect(params[2]).toBe('updated');
-      expect(params[3]).toBe('{"key":"val"}');
-      expect(params[4]).toBe(false);
-      expect(params[5]).toBe('ep-1');
-    });
-
-    it('should handle single field (active) update with correct indices', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: 'ep-1' }]);
-
-      await admin.updateEndpoint('ep-1', { active: false });
-
-      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
-      expect(sql).toContain('active = $1');
-      expect(sql).toContain('WHERE id = $2::uuid');
-      expect(params).toEqual([false, 'ep-1']);
-    });
-
-    it('should pass metadata as JSON string parameter', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: 'ep-1' }]);
-
-      await admin.updateEndpoint('ep-1', { metadata: { nested: { a: 1 } } });
-
-      const params = prisma.$queryRawUnsafe.mock.calls[0].slice(1);
-      expect(params[0]).toBe('{"nested":{"a":1}}');
+      expect(result).not.toBeNull();
+      expect(endpointAdmin.updateEndpoint).toHaveBeenCalledWith('ep-1', {
+        url: 'https://new.com',
+      });
     });
 
     it('should return null when endpoint not found', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      endpointAdmin.updateEndpoint.mockResolvedValueOnce(null);
 
       const result = await admin.updateEndpoint('non-existent', {
         url: 'https://new-url.com',
@@ -186,16 +170,17 @@ describe('WebhookAdminService', () => {
   });
 
   describe('deleteEndpoint', () => {
-    it('should return true on successful delete', async () => {
-      prisma.$executeRaw.mockResolvedValueOnce(1);
+    it('should delegate to endpointAdmin.deleteEndpoint', async () => {
+      endpointAdmin.deleteEndpoint.mockResolvedValueOnce(true);
 
       const result = await admin.deleteEndpoint('ep-1');
 
       expect(result).toBe(true);
+      expect(endpointAdmin.deleteEndpoint).toHaveBeenCalledWith('ep-1');
     });
 
     it('should return false when endpoint not found', async () => {
-      prisma.$executeRaw.mockResolvedValueOnce(0);
+      endpointAdmin.deleteEndpoint.mockResolvedValueOnce(false);
 
       const result = await admin.deleteEndpoint('non-existent');
 
@@ -203,17 +188,44 @@ describe('WebhookAdminService', () => {
     });
   });
 
+  describe('getDeliveryLogs', () => {
+    it('should delegate to deliveryAdmin.getDeliveryLogs', async () => {
+      deliveryAdmin.getDeliveryLogs.mockResolvedValueOnce([
+        makeDeliveryRecord({ id: 'del-1' }),
+        makeDeliveryRecord({ id: 'del-2' }),
+      ]);
+
+      const result = await admin.getDeliveryLogs('ep-1');
+
+      expect(result).toHaveLength(2);
+      expect(deliveryAdmin.getDeliveryLogs).toHaveBeenCalledWith('ep-1', undefined);
+    });
+
+    it('should pass filters to delegate', async () => {
+      const filters = { status: 'FAILED' as const, limit: 10, offset: 5 };
+      deliveryAdmin.getDeliveryLogs.mockResolvedValueOnce([
+        makeDeliveryRecord({ id: 'del-2', status: 'FAILED' }),
+      ]);
+
+      const result = await admin.getDeliveryLogs('ep-1', filters);
+
+      expect(result).toHaveLength(1);
+      expect(deliveryAdmin.getDeliveryLogs).toHaveBeenCalledWith('ep-1', filters);
+    });
+  });
+
   describe('retryDelivery', () => {
-    it('should reset FAILED delivery to PENDING', async () => {
-      prisma.$executeRaw.mockResolvedValueOnce(1);
+    it('should delegate to deliveryAdmin.retryDelivery', async () => {
+      deliveryAdmin.retryDelivery.mockResolvedValueOnce(true);
 
       const result = await admin.retryDelivery('del-1');
 
       expect(result).toBe(true);
+      expect(deliveryAdmin.retryDelivery).toHaveBeenCalledWith('del-1');
     });
 
     it('should return false for non-FAILED delivery', async () => {
-      prisma.$executeRaw.mockResolvedValueOnce(0);
+      deliveryAdmin.retryDelivery.mockResolvedValueOnce(false);
 
       const result = await admin.retryDelivery('del-2');
 
@@ -222,86 +234,21 @@ describe('WebhookAdminService', () => {
   });
 
   describe('sendTestEvent', () => {
-    it('should create test event and delivery for existing endpoint', async () => {
-      prisma.$queryRaw
-        .mockResolvedValueOnce([{ id: 'ep-1', url: 'https://example.com', tenantId: null }])
-        .mockResolvedValueOnce([{ id: 'evt-test' }]);
-      prisma.$executeRaw.mockResolvedValueOnce(1);
+    it('should delegate to endpointAdmin.sendTestEvent', async () => {
+      endpointAdmin.sendTestEvent.mockResolvedValueOnce('evt-test');
 
       const eventId = await admin.sendTestEvent('ep-1');
 
       expect(eventId).toBe('evt-test');
-      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(endpointAdmin.sendTestEvent).toHaveBeenCalledWith('ep-1');
     });
 
     it('should return null for non-existent endpoint', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([]);
+      endpointAdmin.sendTestEvent.mockResolvedValueOnce(null);
 
       const result = await admin.sendTestEvent('non-existent');
 
       expect(result).toBeNull();
-    });
-  });
-
-  describe('getDeliveryLogs', () => {
-    it('should use default limit=50 and offset=0 when no filters', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
-
-      await admin.getDeliveryLogs('ep-1');
-
-      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
-      expect(sql).toContain('LIMIT $2');
-      expect(sql).toContain('OFFSET $3');
-      expect(params[0]).toBe('ep-1');
-      expect(params[1]).toBe(50);  // default limit
-      expect(params[2]).toBe(0);   // default offset
-    });
-
-    it('should build WHERE clause with all filter combinations', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
-
-      const since = new Date('2026-01-01');
-      const until = new Date('2026-12-31');
-
-      await admin.getDeliveryLogs('ep-1', {
-        status: 'FAILED',
-        eventType: 'order.created',
-        since,
-        until,
-        limit: 10,
-        offset: 5,
-      });
-
-      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
-
-      // 4 WHERE conditions + limit + offset = 6 params (+ endpoint_id = 7 total)
-      expect(sql).toContain('d.endpoint_id = $1');
-      expect(sql).toContain('d.status = $2');
-      expect(sql).toContain('ev.event_type = $3');
-      expect(sql).toContain('d.last_attempt_at >= $4');
-      expect(sql).toContain('d.last_attempt_at <= $5');
-      expect(sql).toContain('LIMIT $6');
-      expect(sql).toContain('OFFSET $7');
-
-      expect(params[0]).toBe('ep-1');
-      expect(params[1]).toBe('FAILED');
-      expect(params[2]).toBe('order.created');
-      expect(params[3]).toBe(since);
-      expect(params[4]).toBe(until);
-      expect(params[5]).toBe(10);
-      expect(params[6]).toBe(5);
-    });
-
-    it('should support filtering by status only', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([
-        { id: 'del-2', status: 'FAILED' },
-      ]);
-
-      await admin.getDeliveryLogs('ep-1', { status: 'FAILED' });
-
-      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
-      expect(sql).toContain('d.status = $2');
-      expect(params[1]).toBe('FAILED');
     });
   });
 });

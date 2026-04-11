@@ -4,8 +4,16 @@ import { Injectable } from '@nestjs/common';
 import { WebhookModule } from './webhook.module';
 import { WebhookService } from './webhook.service';
 import { WebhookAdminService } from './webhook.admin.service';
+import { WebhookEndpointAdminService } from './webhook.endpoint-admin.service';
+import { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
 import { WebhookSigner } from './webhook.signer';
-import { WEBHOOK_MODULE_OPTIONS } from './webhook.constants';
+import {
+  WEBHOOK_MODULE_OPTIONS,
+  WEBHOOK_EVENT_REPOSITORY,
+  WEBHOOK_ENDPOINT_REPOSITORY,
+  WEBHOOK_DELIVERY_REPOSITORY,
+  WEBHOOK_HTTP_CLIENT,
+} from './webhook.constants';
 import {
   WebhookModuleOptions,
   WebhookOptionsFactory,
@@ -45,6 +53,36 @@ describe('WebhookModule', () => {
       expect(module.get(WebhookSigner)).toBeInstanceOf(WebhookSigner);
     });
 
+    it('should provide WebhookEndpointAdminService and WebhookDeliveryAdminService', async () => {
+      module = await Test.createTestingModule({
+        imports: [
+          WebhookModule.forRoot({
+            prisma: mockPrisma,
+            polling: { interval: 999_999 },
+          }),
+        ],
+      }).compile();
+
+      expect(module.get(WebhookEndpointAdminService)).toBeInstanceOf(WebhookEndpointAdminService);
+      expect(module.get(WebhookDeliveryAdminService)).toBeInstanceOf(WebhookDeliveryAdminService);
+    });
+
+    it('should provide repository port tokens', async () => {
+      module = await Test.createTestingModule({
+        imports: [
+          WebhookModule.forRoot({
+            prisma: mockPrisma,
+            polling: { interval: 999_999 },
+          }),
+        ],
+      }).compile();
+
+      expect(module.get(WEBHOOK_EVENT_REPOSITORY)).toBeDefined();
+      expect(module.get(WEBHOOK_ENDPOINT_REPOSITORY)).toBeDefined();
+      expect(module.get(WEBHOOK_DELIVERY_REPOSITORY)).toBeDefined();
+      expect(module.get(WEBHOOK_HTTP_CLIENT)).toBeDefined();
+    });
+
     it('should inject the provided options via WEBHOOK_MODULE_OPTIONS token', async () => {
       const opts: WebhookModuleOptions = {
         prisma: mockPrisma,
@@ -60,9 +98,52 @@ describe('WebhookModule', () => {
       expect(injected).toBe(opts);
       expect(injected.delivery?.maxRetries).toBe(7);
     });
+
+    it('should use custom repositories when provided', async () => {
+      const customEventRepo = { saveEvent: jest.fn(), saveEventInTransaction: jest.fn() };
+      const customEndpointRepo = {
+        findMatchingEndpoints: jest.fn(),
+        findMatchingEndpointsInTransaction: jest.fn(),
+        createEndpoint: jest.fn(),
+        getEndpoint: jest.fn(),
+        listEndpoints: jest.fn(),
+        updateEndpoint: jest.fn(),
+        deleteEndpoint: jest.fn(),
+        resetFailures: jest.fn(),
+        incrementFailures: jest.fn(),
+        disableEndpoint: jest.fn(),
+        recoverEligibleEndpoints: jest.fn(),
+      };
+
+      module = await Test.createTestingModule({
+        imports: [
+          WebhookModule.forRoot({
+            polling: { interval: 999_999 },
+            eventRepository: customEventRepo as any,
+            endpointRepository: customEndpointRepo as any,
+            deliveryRepository: {
+              runInTransaction: jest.fn(),
+              createDeliveriesInTransaction: jest.fn(),
+              claimPendingDeliveries: jest.fn(),
+              enrichDeliveries: jest.fn(),
+              markSent: jest.fn(),
+              markFailed: jest.fn(),
+              markRetry: jest.fn(),
+              resetToPending: jest.fn(),
+              getDeliveryLogs: jest.fn(),
+              retryDelivery: jest.fn(),
+              createTestDelivery: jest.fn(),
+            } as any,
+          }),
+        ],
+      }).compile();
+
+      const eventRepo = module.get(WEBHOOK_EVENT_REPOSITORY);
+      expect(eventRepo).toBe(customEventRepo);
+    });
   });
 
-  describe('forRootAsync — useFactory', () => {
+  describe('forRootAsync -- useFactory', () => {
     let module: TestingModule;
 
     afterEach(async () => {
@@ -92,7 +173,7 @@ describe('WebhookModule', () => {
     });
   });
 
-  describe('forRootAsync — useClass', () => {
+  describe('forRootAsync -- useClass', () => {
     let module: TestingModule;
 
     afterEach(async () => {
@@ -125,7 +206,7 @@ describe('WebhookModule', () => {
     });
   });
 
-  describe('lifecycle — onModuleInit / onModuleDestroy', () => {
+  describe('lifecycle -- onModuleInit / onModuleDestroy', () => {
     let module: TestingModule;
 
     afterEach(async () => {
@@ -144,18 +225,18 @@ describe('WebhookModule', () => {
 
       const registry = module.get(SchedulerRegistry);
 
-      // Before init — no interval
+      // Before init -- no interval
       expect(() => registry.getInterval('webhook-delivery-poll')).toThrow();
 
       await module.init();
 
-      // After init — interval registered
+      // After init -- interval registered
       const interval = registry.getInterval('webhook-delivery-poll');
       expect(interval).toBeDefined();
 
       await module.close();
 
-      // After destroy — interval removed
+      // After destroy -- interval removed
       expect(() => registry.getInterval('webhook-delivery-poll')).toThrow();
     });
 

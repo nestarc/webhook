@@ -1,5 +1,11 @@
 import { WebhookService } from './webhook.service';
 import { WebhookEvent } from './webhook.event';
+import { WebhookEventRepository } from './ports/webhook-event.repository';
+import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
+import {
+  WebhookDeliveryRepository,
+} from './ports/webhook-delivery.repository';
+import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
 
 class TestEvent extends WebhookEvent {
   static readonly eventType = 'test.created';
@@ -8,130 +14,189 @@ class TestEvent extends WebhookEvent {
   }
 }
 
-function createMockPrisma() {
-  const txClient = {
-    $queryRaw: jest.fn(),
-    $executeRaw: jest.fn(),
-    $executeRawUnsafe: jest.fn(),
+function createMockRepos() {
+  const eventRepo = {
+    saveEvent: jest.fn(),
+    saveEventInTransaction: jest.fn(),
   };
 
-  const prisma = {
-    $queryRaw: jest.fn(),
-    $executeRaw: jest.fn(),
-    $executeRawUnsafe: jest.fn(),
-    $transaction: jest.fn((cb: (tx: typeof txClient) => Promise<unknown>) => cb(txClient)),
+  const endpointRepo = {
+    findMatchingEndpointsInTransaction: jest.fn(),
   };
 
-  return { prisma, txClient };
+  const deliveryRepo = {
+    runInTransaction: jest.fn(<T,>(cb: (tx: unknown) => Promise<T>) => cb('fake-tx' as unknown)),
+    createDeliveriesInTransaction: jest.fn(),
+  };
+
+  return { eventRepo, endpointRepo, deliveryRepo };
+}
+
+function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
+  return {
+    id: 'ep-1',
+    url: 'https://a.com/hook',
+    secret: 'sec1',
+    events: ['test.created'],
+    active: true,
+    description: null,
+    metadata: null,
+    tenantId: null,
+    consecutiveFailures: 0,
+    disabledAt: null,
+    disabledReason: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
 }
 
 describe('WebhookService', () => {
   let service: WebhookService;
-  let prisma: ReturnType<typeof createMockPrisma>['prisma'];
-  let txClient: ReturnType<typeof createMockPrisma>['txClient'];
+  let eventRepo: ReturnType<typeof createMockRepos>['eventRepo'];
+  let endpointRepo: ReturnType<typeof createMockRepos>['endpointRepo'];
+  let deliveryRepo: ReturnType<typeof createMockRepos>['deliveryRepo'];
 
   beforeEach(() => {
-    const mocks = createMockPrisma();
-    prisma = mocks.prisma;
-    txClient = mocks.txClient;
-    service = new WebhookService({ prisma });
+    const mocks = createMockRepos();
+    eventRepo = mocks.eventRepo;
+    endpointRepo = mocks.endpointRepo;
+    deliveryRepo = mocks.deliveryRepo;
+
+    service = new WebhookService(
+      eventRepo as unknown as WebhookEventRepository,
+      endpointRepo as unknown as WebhookEndpointRepository,
+      deliveryRepo as unknown as WebhookDeliveryRepository,
+      {},
+    );
   });
 
   describe('send', () => {
     it('should save event and create deliveries within a transaction', async () => {
       const eventId = 'evt-123';
-      txClient.$queryRaw
-        .mockResolvedValueOnce([{ id: eventId }])
-        .mockResolvedValueOnce([
-          { id: 'ep-1', url: 'https://a.com/hook', secret: 'sec1', events: ['test.created'], active: true },
-          { id: 'ep-2', url: 'https://b.com/hook', secret: 'sec2', events: ['*'], active: true },
-        ]);
-      txClient.$executeRawUnsafe.mockResolvedValueOnce(2);
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce(eventId);
+      endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-1' }),
+        makeEndpoint({ id: 'ep-2', events: ['*'] }),
+      ]);
+      deliveryRepo.createDeliveriesInTransaction.mockResolvedValueOnce(undefined);
 
       const result = await service.send(new TestEvent('t1'));
 
       expect(result).toBe(eventId);
-      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-      expect(txClient.$queryRaw).toHaveBeenCalledTimes(2);
-      expect(txClient.$executeRawUnsafe).toHaveBeenCalledTimes(1);
-
-      // Verify parameterized INSERT uses unnest
-      const insertSql = txClient.$executeRawUnsafe.mock.calls[0][0] as string;
-      expect(insertSql).toContain('unnest');
-      // Verify endpoint IDs are passed as parameters, not interpolated
-      const endpointIdsArg = txClient.$executeRawUnsafe.mock.calls[0][2];
-      expect(endpointIdsArg).toEqual(['ep-1', 'ep-2']);
+      expect(deliveryRepo.runInTransaction).toHaveBeenCalledTimes(1);
+      expect(eventRepo.saveEventInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 't1' },
+        null,
+      );
+      expect(endpointRepo.findMatchingEndpointsInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        undefined,
+      );
+      expect(deliveryRepo.createDeliveriesInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        eventId,
+        ['ep-1', 'ep-2'],
+        5,
+      );
     });
 
     it('should return eventId even when no matching endpoints', async () => {
       const eventId = 'evt-456';
-      txClient.$queryRaw
-        .mockResolvedValueOnce([{ id: eventId }])
-        .mockResolvedValueOnce([]);
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce(eventId);
+      endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([]);
 
       const result = await service.send(new TestEvent('t2'));
 
       expect(result).toBe(eventId);
-      expect(txClient.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(deliveryRepo.createDeliveriesInTransaction).not.toHaveBeenCalled();
     });
 
     it('should rollback when delivery creation fails', async () => {
-      txClient.$queryRaw
-        .mockResolvedValueOnce([{ id: 'evt-err' }])
-        .mockResolvedValueOnce([
-          { id: 'ep-1', url: 'https://a.com/hook', secret: 'sec1', events: ['test.created'], active: true },
-        ]);
-      txClient.$executeRawUnsafe.mockRejectedValueOnce(new Error('DB constraint violation'));
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce('evt-err');
+      endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-1' }),
+      ]);
+      deliveryRepo.createDeliveriesInTransaction.mockRejectedValueOnce(
+        new Error('DB constraint violation'),
+      );
 
-      await expect(service.send(new TestEvent('t-fail'))).rejects.toThrow('DB constraint violation');
+      await expect(service.send(new TestEvent('t-fail'))).rejects.toThrow(
+        'DB constraint violation',
+      );
+    });
+
+    it('should use maxRetries from options', async () => {
+      const mocks = createMockRepos();
+      const customService = new WebhookService(
+        mocks.eventRepo as unknown as WebhookEventRepository,
+        mocks.endpointRepo as unknown as WebhookEndpointRepository,
+        mocks.deliveryRepo as unknown as WebhookDeliveryRepository,
+        { delivery: { maxRetries: 10 } },
+      );
+
+      mocks.eventRepo.saveEventInTransaction.mockResolvedValueOnce('evt-custom');
+      mocks.endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-1' }),
+      ]);
+      mocks.deliveryRepo.createDeliveriesInTransaction.mockResolvedValueOnce(undefined);
+
+      await customService.send(new TestEvent('t-custom'));
+
+      expect(mocks.deliveryRepo.createDeliveriesInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'evt-custom',
+        ['ep-1'],
+        10,
+      );
     });
   });
 
   describe('sendToTenant', () => {
-    it('should include tenant_id in endpoint query and event insert', async () => {
+    it('should include tenantId in event save and endpoint lookup', async () => {
       const eventId = 'evt-789';
-      txClient.$queryRaw
-        .mockResolvedValueOnce([{ id: eventId }])
-        .mockResolvedValueOnce([
-          { id: 'ep-t1', url: 'https://tenant.com/hook', secret: 's', events: ['test.created'], active: true },
-        ]);
-      txClient.$executeRawUnsafe.mockResolvedValueOnce(1);
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce(eventId);
+      endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-t1', tenantId: 'tenant-1' }),
+      ]);
+      deliveryRepo.createDeliveriesInTransaction.mockResolvedValueOnce(undefined);
 
       await service.sendToTenant('tenant-1', new TestEvent('t3'));
 
-      // Tagged template calls: $queryRaw`...${val}...` → mock receives (TemplateStringsArray, ...values)
-      // 1st call = event INSERT
-      const eventInsertArgs = txClient.$queryRaw.mock.calls[0];
-      const eventInsertSqlParts: string[] = Array.from(eventInsertArgs[0]);
-      const eventInsertSql = eventInsertSqlParts.join('?');
-      expect(eventInsertSql).toContain('webhook_events');
-      // Interpolated values follow the template strings array
-      const eventInsertValues = eventInsertArgs.slice(1);
-      expect(eventInsertValues).toContain('tenant-1');
-
-      // 2nd call = endpoint SELECT — should contain tenant_id filter
-      const endpointArgs = txClient.$queryRaw.mock.calls[1];
-      const endpointSqlParts: string[] = Array.from(endpointArgs[0]);
-      const endpointSql = endpointSqlParts.join('?');
-      expect(endpointSql).toContain('tenant_id');
-      const endpointValues = endpointArgs.slice(1);
-      expect(endpointValues).toContain('tenant-1');
+      expect(eventRepo.saveEventInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 't3' },
+        'tenant-1',
+      );
+      expect(endpointRepo.findMatchingEndpointsInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        'tenant-1',
+      );
     });
 
-    it('should not include tenant_id filter in send() without tenant', async () => {
-      txClient.$queryRaw
-        .mockResolvedValueOnce([{ id: 'evt-no-tenant' }])
-        .mockResolvedValueOnce([]);
+    it('should not include tenantId filter in send() without tenant', async () => {
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce('evt-no-tenant');
+      endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([]);
 
       await service.send(new TestEvent('t4'));
 
-      // 2nd call = endpoint SELECT — should NOT contain tenant_id
-      const endpointCall = txClient.$queryRaw.mock.calls[1];
-      const endpointStrings = endpointCall[0]?.strings ?? endpointCall[0];
-      const endpointSql = Array.isArray(endpointStrings)
-        ? endpointStrings.join('?')
-        : String(endpointStrings);
-      expect(endpointSql).not.toContain('tenant_id');
+      // tenantId should be passed as null for event, undefined for endpoint lookup
+      expect(eventRepo.saveEventInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 't4' },
+        null,
+      );
+      expect(endpointRepo.findMatchingEndpointsInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        undefined,
+      );
     });
   });
 });

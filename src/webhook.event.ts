@@ -2,7 +2,13 @@ export abstract class WebhookEvent {
   static readonly eventType: string;
 
   get eventType(): string {
-    return (this.constructor as typeof WebhookEvent).eventType;
+    const type = (this.constructor as typeof WebhookEvent).eventType;
+    if (!type) {
+      throw new Error(
+        `${this.constructor.name} must define static readonly eventType`,
+      );
+    }
+    return type;
   }
 
   toPayload(): Record<string, unknown> {

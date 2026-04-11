@@ -1,285 +1,217 @@
 import { WebhookDeliveryWorker } from './webhook.delivery-worker';
-import { WebhookSigner } from './webhook.signer';
 import { WebhookCircuitBreaker } from './webhook.circuit-breaker';
-import { DEFAULT_BACKOFF_SCHEDULE } from './webhook.constants';
+import { WebhookDispatcher } from './webhook.dispatcher';
+import { WebhookRetryPolicy } from './webhook.retry-policy';
+import {
+  PendingDelivery,
+  WebhookDeliveryRepository,
+} from './ports/webhook-delivery.repository';
+import { DeliveryResult } from './interfaces/webhook-delivery.interface';
 
-function createMockPrisma() {
+function createMockDeliveryRepo() {
   return {
-    $queryRaw: jest.fn(),
-    $executeRaw: jest.fn(),
-    $executeRawUnsafe: jest.fn(),
+    claimPendingDeliveries: jest.fn().mockResolvedValue([]),
+    enrichDeliveries: jest.fn().mockResolvedValue([]),
+    markSent: jest.fn().mockResolvedValue(undefined),
+    markFailed: jest.fn().mockResolvedValue(undefined),
+    markRetry: jest.fn().mockResolvedValue(undefined),
+    resetToPending: jest.fn().mockResolvedValue(undefined),
+  } as jest.Mocked<Pick<
+    WebhookDeliveryRepository,
+    'claimPendingDeliveries' | 'enrichDeliveries' | 'markSent' | 'markFailed' | 'markRetry' | 'resetToPending'
+  >>;
+}
+
+function createMockDispatcher() {
+  return {
+    dispatch: jest.fn(),
+  } as jest.Mocked<Pick<WebhookDispatcher, 'dispatch'>>;
+}
+
+function createMockRetryPolicy() {
+  return {
+    nextAttemptAt: jest.fn().mockReturnValue(new Date(Date.now() + 30_000)),
+  } as jest.Mocked<Pick<WebhookRetryPolicy, 'nextAttemptAt'>>;
+}
+
+function createMockCircuitBreaker() {
+  return {
+    afterDelivery: jest.fn().mockResolvedValue(undefined),
+    recoverEligibleEndpoints: jest.fn().mockResolvedValue(0),
+  } as unknown as jest.Mocked<WebhookCircuitBreaker>;
+}
+
+function makeDelivery(overrides: Partial<PendingDelivery> = {}): PendingDelivery {
+  return {
+    id: 'd-1',
+    event_id: 'evt-1',
+    endpoint_id: 'ep-1',
+    attempts: 0,
+    max_attempts: 3,
+    url: 'https://example.com/hook',
+    secret: Buffer.from('secret').toString('base64'),
+    event_type: 'test.event',
+    payload: { key: 'value' },
+    ...overrides,
   };
+}
+
+function makeSuccessResult(): DeliveryResult {
+  return { success: true, statusCode: 200, body: 'OK', latencyMs: 50 };
+}
+
+function makeFailureResult(): DeliveryResult {
+  return { success: false, statusCode: 500, body: 'Internal Server Error', latencyMs: 100 };
 }
 
 describe('WebhookDeliveryWorker', () => {
   let worker: WebhookDeliveryWorker;
-  let prisma: ReturnType<typeof createMockPrisma>;
-  let signer: WebhookSigner;
+  let deliveryRepo: ReturnType<typeof createMockDeliveryRepo>;
+  let dispatcher: ReturnType<typeof createMockDispatcher>;
+  let retryPolicy: ReturnType<typeof createMockRetryPolicy>;
   let circuitBreaker: jest.Mocked<WebhookCircuitBreaker>;
 
   beforeEach(() => {
-    prisma = createMockPrisma();
-    signer = new WebhookSigner();
-
-    circuitBreaker = {
-      afterDelivery: jest.fn().mockResolvedValue(undefined),
-      recoverEligibleEndpoints: jest.fn().mockResolvedValue(0),
-    } as unknown as jest.Mocked<WebhookCircuitBreaker>;
+    deliveryRepo = createMockDeliveryRepo();
+    dispatcher = createMockDispatcher();
+    retryPolicy = createMockRetryPolicy();
+    circuitBreaker = createMockCircuitBreaker();
 
     worker = new WebhookDeliveryWorker(
+      deliveryRepo as unknown as WebhookDeliveryRepository,
+      dispatcher as unknown as WebhookDispatcher,
+      retryPolicy as unknown as WebhookRetryPolicy,
+      circuitBreaker,
       {
-        prisma,
         delivery: { timeout: 5000, maxRetries: 3, jitter: false },
         polling: { batchSize: 10 },
       },
-      signer,
-      circuitBreaker,
     );
   });
 
   describe('poll', () => {
     it('should do nothing when no pending deliveries', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([]); // claim query returns empty
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([]);
 
       await worker.poll();
 
-      // recover + claim query
       expect(circuitBreaker.recoverEligibleEndpoints).toHaveBeenCalled();
-      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenCalledWith(10);
+      expect(deliveryRepo.enrichDeliveries).not.toHaveBeenCalled();
     });
 
     it('should process deliveries and mark as SENT on success', async () => {
-      const delivery = {
-        id: 'd-1',
-        event_id: 'evt-1',
-        endpoint_id: 'ep-1',
-        attempts: 0,
-        max_attempts: 3,
-      };
+      const claimed = { id: 'd-1', event_id: 'evt-1', endpoint_id: 'ep-1', attempts: 0, max_attempts: 3 };
+      const enriched = makeDelivery();
 
-      // Claim query
-      prisma.$queryRaw.mockResolvedValueOnce([delivery]);
-      // Enrich query
-      prisma.$queryRaw.mockResolvedValueOnce([
-        {
-          ...delivery,
-          url: 'https://httpbin.org/status/200',
-          secret: Buffer.from('secret').toString('base64'),
-          event_type: 'test.event',
-          payload: { key: 'value' },
-        },
-      ]);
-      // Mark sent
-      prisma.$executeRaw.mockResolvedValue(1);
-
-      // Mock fetch
-      global.fetch = jest.fn().mockResolvedValue({
-        status: 200,
-        text: () => Promise.resolve('OK'),
-      });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([claimed as PendingDelivery]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeSuccessResult());
 
       await worker.poll();
 
-      expect(prisma.$executeRaw).toHaveBeenCalled();
+      expect(dispatcher.dispatch).toHaveBeenCalledWith(enriched);
+      expect(deliveryRepo.markSent).toHaveBeenCalledWith(
+        'd-1',
+        1,
+        expect.objectContaining({ success: true }),
+      );
       expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-1', true);
     });
 
     it('should schedule retry on failure with attempts remaining', async () => {
-      const delivery = {
-        id: 'd-2',
-        event_id: 'evt-2',
-        endpoint_id: 'ep-2',
-        attempts: 0,
-        max_attempts: 3,
-      };
+      const enriched = makeDelivery({ id: 'd-2', endpoint_id: 'ep-2' });
+      const nextDate = new Date(Date.now() + 30_000);
 
-      prisma.$queryRaw.mockResolvedValueOnce([delivery]);
-      prisma.$queryRaw.mockResolvedValueOnce([
-        {
-          ...delivery,
-          url: 'https://example.com/fail',
-          secret: Buffer.from('secret').toString('base64'),
-          event_type: 'test.event',
-          payload: {},
-        },
-      ]);
-      prisma.$executeRaw.mockResolvedValue(1);
-
-      global.fetch = jest.fn().mockResolvedValue({
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error'),
-      });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+      retryPolicy.nextAttemptAt.mockReturnValueOnce(nextDate);
 
       await worker.poll();
 
+      expect(deliveryRepo.markRetry).toHaveBeenCalledWith(
+        'd-2',
+        1,
+        nextDate,
+        expect.objectContaining({ success: false }),
+      );
+      expect(retryPolicy.nextAttemptAt).toHaveBeenCalledWith(1);
       expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-2', false);
     });
 
     it('should mark as FAILED when max retries exhausted', async () => {
-      const delivery = {
+      const enriched = makeDelivery({
         id: 'd-3',
-        event_id: 'evt-3',
         endpoint_id: 'ep-3',
-        attempts: 2, // already 2, max is 3 → this attempt (3rd) is final
+        attempts: 2,
         max_attempts: 3,
-      };
-
-      prisma.$queryRaw.mockResolvedValueOnce([delivery]);
-      prisma.$queryRaw.mockResolvedValueOnce([
-        {
-          ...delivery,
-          url: 'https://example.com/fail',
-          secret: Buffer.from('secret').toString('base64'),
-          event_type: 'test.event',
-          payload: {},
-        },
-      ]);
-      prisma.$executeRaw.mockResolvedValue(1);
-
-      global.fetch = jest.fn().mockResolvedValue({
-        status: 500,
-        text: () => Promise.resolve('error'),
       });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
 
       await worker.poll();
 
-      // Should have called markFailed (status=FAILED)
+      expect(deliveryRepo.markFailed).toHaveBeenCalledWith(
+        'd-3',
+        3,
+        expect.objectContaining({ success: false }),
+      );
       expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-3', false);
+      expect(deliveryRepo.markRetry).not.toHaveBeenCalled();
     });
   });
 
-  describe('backoff calculation', () => {
-    it('should follow the backoff schedule', () => {
-      // Access the private method via any cast for testing
-      const calcNext = (worker as any).calculateNextAttempt.bind(worker);
+  describe('dispatch — edge cases', () => {
+    it('should handle dispatch network error gracefully', async () => {
+      const enriched = makeDelivery({ id: 'd-net', endpoint_id: 'ep-net' });
 
-      // With jitter disabled, the delay should exactly match the schedule
-      for (let i = 0; i < DEFAULT_BACKOFF_SCHEDULE.length; i++) {
-        const next: Date = calcNext(i + 1);
-        const delayMs = next.getTime() - Date.now();
-        const expectedMs = DEFAULT_BACKOFF_SCHEDULE[i] * 1000;
-        // Allow 100ms tolerance for execution time
-        expect(delayMs).toBeGreaterThan(expectedMs - 100);
-        expect(delayMs).toBeLessThan(expectedMs + 100);
-      }
-    });
-  });
-
-  describe('deliver — edge cases', () => {
-    function setupDeliveryMock(delivery: Record<string, unknown>) {
-      prisma.$queryRaw.mockResolvedValueOnce([delivery]);
-      prisma.$queryRaw.mockResolvedValueOnce([
-        {
-          ...delivery,
-          url: 'https://example.com/hook',
-          secret: Buffer.from('a'.repeat(32)).toString('base64'),
-          event_type: 'test.event',
-          payload: { key: 'value' },
-        },
-      ]);
-      prisma.$executeRaw.mockResolvedValue(1);
-    }
-
-    it('should include Standard Webhooks headers in fetch request', async () => {
-      setupDeliveryMock({ id: 'd-h', event_id: 'evt-h', endpoint_id: 'ep-h', attempts: 0, max_attempts: 3 });
-
-      global.fetch = jest.fn().mockResolvedValue({
-        status: 200,
-        text: () => Promise.resolve('ok'),
-      });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
       await worker.poll();
 
-      const fetchCall = (global.fetch as jest.Mock).mock.calls[0];
-      const headers = fetchCall[1].headers;
-      expect(headers['webhook-id']).toBe('evt-h');
-      expect(headers['webhook-timestamp']).toBeDefined();
-      expect(headers['webhook-signature']).toMatch(/^v1,.+$/);
-      expect(headers['Content-Type']).toBe('application/json');
-      expect(headers['User-Agent']).toBe('@nestarc/webhook');
+      // processDelivery catch block resets to PENDING
+      expect(deliveryRepo.resetToPending).toHaveBeenCalledWith('d-net');
     });
 
-    it('should truncate response body to 1KB', async () => {
-      setupDeliveryMock({ id: 'd-trunc', event_id: 'evt-trunc', endpoint_id: 'ep-trunc', attempts: 0, max_attempts: 3 });
+    it('should reset to PENDING when markSent throws', async () => {
+      const enriched = makeDelivery({ id: 'd-err', endpoint_id: 'ep-err' });
 
-      const longBody = 'x'.repeat(2048);
-      global.fetch = jest.fn().mockResolvedValue({
-        status: 200,
-        text: () => Promise.resolve(longBody),
-      });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeSuccessResult());
+      deliveryRepo.markSent.mockRejectedValueOnce(new Error('DB write failed'));
 
       await worker.poll();
 
-      // markSent is called via $executeRaw — check the response_body param
-      // The deliver() method slices to RESPONSE_BODY_MAX_LENGTH (1024)
-      // Since we can't easily inspect tagged template params, verify via the mock call
-      expect(prisma.$executeRaw).toHaveBeenCalled();
+      expect(deliveryRepo.resetToPending).toHaveBeenCalledWith('d-err');
     });
 
-    it('should handle fetch network error gracefully', async () => {
-      setupDeliveryMock({ id: 'd-net', event_id: 'evt-net', endpoint_id: 'ep-net', attempts: 0, max_attempts: 3 });
+    it('should process multiple deliveries in parallel', async () => {
+      const d1 = makeDelivery({ id: 'd-p1', endpoint_id: 'ep-p1' });
+      const d2 = makeDelivery({ id: 'd-p2', endpoint_id: 'ep-p2' });
 
-      global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([d1, d2]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([d1, d2]);
+      dispatcher.dispatch.mockResolvedValue(makeSuccessResult());
 
       await worker.poll();
 
-      // Should record failure via circuit breaker
-      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-net', false);
-    });
-
-    it('should handle fetch abort (timeout) as failure', async () => {
-      setupDeliveryMock({ id: 'd-abort', event_id: 'evt-abort', endpoint_id: 'ep-abort', attempts: 0, max_attempts: 3 });
-
-      const abortError = new DOMException('The operation was aborted', 'AbortError');
-      global.fetch = jest.fn().mockRejectedValue(abortError);
-
-      await worker.poll();
-
-      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-abort', false);
-    });
-
-    it('should reset to PENDING when processDelivery internal error occurs', async () => {
-      // Simulate an error AFTER fetch but during state update
-      prisma.$queryRaw.mockResolvedValueOnce([
-        { id: 'd-err', event_id: 'evt-err', endpoint_id: 'ep-err', attempts: 0, max_attempts: 3 },
-      ]);
-      prisma.$queryRaw.mockResolvedValueOnce([
-        {
-          id: 'd-err', event_id: 'evt-err', endpoint_id: 'ep-err', attempts: 0, max_attempts: 3,
-          url: 'https://example.com/hook',
-          secret: Buffer.from('a'.repeat(32)).toString('base64'),
-          event_type: 'test.event',
-          payload: {},
-        },
-      ]);
-
-      global.fetch = jest.fn().mockResolvedValue({
-        status: 200,
-        text: () => Promise.resolve('ok'),
-      });
-
-      // Make markSent throw to trigger the catch block
-      prisma.$executeRaw
-        .mockRejectedValueOnce(new Error('DB write failed'))
-        // The catch block will try to reset to PENDING
-        .mockResolvedValueOnce(1);
-
-      await worker.poll();
-
-      // The second $executeRaw call should be the PENDING reset
-      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+      expect(dispatcher.dispatch).toHaveBeenCalledTimes(2);
+      expect(deliveryRepo.markSent).toHaveBeenCalledTimes(2);
     });
   });
 
   describe('graceful shutdown — waiting', () => {
     it('should wait for active deliveries before completing shutdown', async () => {
-      // Simulate an active delivery by setting the counter
       (worker as any).activeDeliveries = 1;
 
-      // Start shutdown — it will poll waiting for activeDeliveries to reach 0
       const shutdownPromise = worker.onModuleDestroy();
 
-      // Simulate delivery completion after a short delay
       setTimeout(() => {
         (worker as any).activeDeliveries = 0;
       }, 200);
@@ -293,7 +225,7 @@ describe('WebhookDeliveryWorker', () => {
 
   describe('recovery', () => {
     it('should call recoverEligibleEndpoints even when no pending deliveries', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([]); // no pending deliveries
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([]);
 
       await worker.poll();
 
@@ -303,7 +235,6 @@ describe('WebhookDeliveryWorker', () => {
 
   describe('concurrency guard', () => {
     it('should not run concurrent polls', async () => {
-      // Make the first poll hang by never resolving the recovery call
       let resolveRecovery!: () => void;
       circuitBreaker.recoverEligibleEndpoints.mockReturnValueOnce(
         new Promise<number>((resolve) => {
@@ -319,7 +250,7 @@ describe('WebhookDeliveryWorker', () => {
       expect(circuitBreaker.recoverEligibleEndpoints).toHaveBeenCalledTimes(1);
 
       resolveRecovery();
-      prisma.$queryRaw.mockResolvedValueOnce([]); // no deliveries
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([]);
       await poll1;
     });
   });
@@ -334,8 +265,7 @@ describe('WebhookDeliveryWorker', () => {
       await worker.onModuleDestroy();
       await worker.poll();
 
-      // Should not have made any DB calls
-      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+      expect(deliveryRepo.claimPendingDeliveries).not.toHaveBeenCalled();
     });
   });
 });

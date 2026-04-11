@@ -1,19 +1,32 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { WebhookEvent } from './webhook.event';
-import { WEBHOOK_MODULE_OPTIONS } from './webhook.constants';
+import {
+  WEBHOOK_DELIVERY_REPOSITORY,
+  WEBHOOK_ENDPOINT_REPOSITORY,
+  WEBHOOK_EVENT_REPOSITORY,
+  WEBHOOK_MODULE_OPTIONS,
+} from './webhook.constants';
 import { WebhookModuleOptions } from './interfaces/webhook-options.interface';
-import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
+import { WebhookEventRepository } from './ports/webhook-event.repository';
+import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
+import { WebhookDeliveryRepository } from './ports/webhook-delivery.repository';
 
 @Injectable()
 export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
-  private readonly prisma: any;
+  private readonly maxAttempts: number;
 
   constructor(
+    @Inject(WEBHOOK_EVENT_REPOSITORY)
+    private readonly eventRepo: WebhookEventRepository,
+    @Inject(WEBHOOK_ENDPOINT_REPOSITORY)
+    private readonly endpointRepo: WebhookEndpointRepository,
+    @Inject(WEBHOOK_DELIVERY_REPOSITORY)
+    private readonly deliveryRepo: WebhookDeliveryRepository,
     @Inject(WEBHOOK_MODULE_OPTIONS)
-    private readonly options: WebhookModuleOptions,
+    options: WebhookModuleOptions,
   ) {
-    this.prisma = options.prisma;
+    this.maxAttempts = options.delivery?.maxRetries ?? 5;
   }
 
   async send(event: WebhookEvent): Promise<string> {
@@ -30,20 +43,21 @@ export class WebhookService {
   ): Promise<string> {
     const payload = event.toPayload();
     const eventType = event.eventType;
-    const maxAttempts = this.options.delivery?.maxRetries ?? 5;
 
-    return this.prisma.$transaction(async (tx: any) => {
-      // 1. Save event
-      const [savedEvent] = await tx.$queryRaw<
-        { id: string }[]
-      >`INSERT INTO webhook_events (event_type, payload, tenant_id)
-        VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId ?? null})
-        RETURNING id`;
+    return this.deliveryRepo.runInTransaction(async (tx) => {
+      const eventId = await this.eventRepo.saveEventInTransaction(
+        tx,
+        eventType,
+        payload,
+        tenantId ?? null,
+      );
 
-      const eventId = savedEvent.id;
-
-      // 2. Find matching endpoints
-      const endpoints = await this.findMatchingEndpoints(tx, eventType, tenantId);
+      const endpoints =
+        await this.endpointRepo.findMatchingEndpointsInTransaction(
+          tx,
+          eventType,
+          tenantId,
+        );
 
       if (endpoints.length === 0) {
         this.logger.debug(
@@ -52,14 +66,12 @@ export class WebhookService {
         return eventId;
       }
 
-      // 3. Batch create delivery records (parameterized)
       const endpointIds = endpoints.map((ep) => ep.id);
-      await tx.$executeRawUnsafe(
-        `INSERT INTO webhook_deliveries (event_id, endpoint_id, status, attempts, max_attempts, next_attempt_at)
-         SELECT $1::uuid, unnest($2::uuid[]), 'PENDING', 0, $3, NOW()`,
+      await this.deliveryRepo.createDeliveriesInTransaction(
+        tx,
         eventId,
         endpointIds,
-        maxAttempts,
+        this.maxAttempts,
       );
 
       this.logger.log(
@@ -68,24 +80,5 @@ export class WebhookService {
 
       return eventId;
     });
-  }
-
-  private async findMatchingEndpoints(
-    tx: any,
-    eventType: string,
-    tenantId: string | undefined,
-  ): Promise<EndpointRecord[]> {
-    if (tenantId !== undefined) {
-      return tx.$queryRaw<EndpointRecord[]>`
-        SELECT * FROM webhook_endpoints
-        WHERE active = true
-          AND tenant_id = ${tenantId}
-          AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
-    }
-
-    return tx.$queryRaw<EndpointRecord[]>`
-      SELECT * FROM webhook_endpoints
-      WHERE active = true
-        AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
   }
 }

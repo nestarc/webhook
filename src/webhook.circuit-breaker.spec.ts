@@ -1,78 +1,107 @@
 import { WebhookCircuitBreaker } from './webhook.circuit-breaker';
+import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
 
-function createMockPrisma() {
+function createMockEndpointRepo() {
   return {
-    $queryRaw: jest.fn(),
-    $executeRaw: jest.fn(),
-  };
+    resetFailures: jest.fn().mockResolvedValue(undefined),
+    incrementFailures: jest.fn().mockResolvedValue(1),
+    disableEndpoint: jest.fn().mockResolvedValue(undefined),
+    recoverEligibleEndpoints: jest.fn().mockResolvedValue(0),
+  } as jest.Mocked<Pick<WebhookEndpointRepository, 'resetFailures' | 'incrementFailures' | 'disableEndpoint' | 'recoverEligibleEndpoints'>>;
 }
 
 describe('WebhookCircuitBreaker', () => {
   let cb: WebhookCircuitBreaker;
-  let prisma: ReturnType<typeof createMockPrisma>;
+  let endpointRepo: ReturnType<typeof createMockEndpointRepo>;
 
   beforeEach(() => {
-    prisma = createMockPrisma();
-    cb = new WebhookCircuitBreaker({
-      prisma,
-      circuitBreaker: {
-        failureThreshold: 3,
-        cooldownMinutes: 30,
+    endpointRepo = createMockEndpointRepo();
+    cb = new WebhookCircuitBreaker(
+      endpointRepo as unknown as WebhookEndpointRepository,
+      {
+        circuitBreaker: {
+          failureThreshold: 3,
+          cooldownMinutes: 30,
+        },
       },
-    });
+    );
   });
 
   describe('afterDelivery — success', () => {
     it('should reset failures on success', async () => {
-      prisma.$executeRaw.mockResolvedValueOnce(1);
-
       await cb.afterDelivery('ep-1', true);
 
-      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(endpointRepo.resetFailures).toHaveBeenCalledTimes(1);
+      expect(endpointRepo.resetFailures).toHaveBeenCalledWith('ep-1');
+      expect(endpointRepo.incrementFailures).not.toHaveBeenCalled();
     });
   });
 
   describe('afterDelivery — failure below threshold', () => {
     it('should increment failures without disabling', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ consecutive_failures: 2 }]);
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
 
       await cb.afterDelivery('ep-1', false);
 
-      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
-      // Should NOT call executeRaw to disable (only the increment query)
-      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+      expect(endpointRepo.incrementFailures).toHaveBeenCalledTimes(1);
+      expect(endpointRepo.incrementFailures).toHaveBeenCalledWith('ep-1');
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
     });
   });
 
   describe('afterDelivery — failure at threshold', () => {
     it('should disable endpoint when threshold reached', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ consecutive_failures: 3 }]);
-      prisma.$executeRaw.mockResolvedValueOnce(1); // disable endpoint
+      endpointRepo.incrementFailures.mockResolvedValueOnce(3);
 
       await cb.afterDelivery('ep-1', false);
 
-      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(endpointRepo.disableEndpoint).toHaveBeenCalledTimes(1);
+      expect(endpointRepo.disableEndpoint).toHaveBeenCalledWith(
+        'ep-1',
+        'consecutive_failures_exceeded',
+      );
+    });
+  });
+
+  describe('afterDelivery — failure above threshold', () => {
+    it('should also disable endpoint when above threshold', async () => {
+      endpointRepo.incrementFailures.mockResolvedValueOnce(5);
+
+      await cb.afterDelivery('ep-1', false);
+
+      expect(endpointRepo.disableEndpoint).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('recoverEligibleEndpoints', () => {
     it('should recover endpoints past cooldown', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([
-        { id: 'ep-1' },
-        { id: 'ep-2' },
-      ]);
+      endpointRepo.recoverEligibleEndpoints.mockResolvedValueOnce(2);
 
       const count = await cb.recoverEligibleEndpoints();
 
       expect(count).toBe(2);
+      expect(endpointRepo.recoverEligibleEndpoints).toHaveBeenCalledWith(30);
     });
 
     it('should return 0 when no endpoints to recover', async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([]);
+      endpointRepo.recoverEligibleEndpoints.mockResolvedValueOnce(0);
 
       const count = await cb.recoverEligibleEndpoints();
 
       expect(count).toBe(0);
+    });
+  });
+
+  describe('default options', () => {
+    it('should use default threshold and cooldown when not configured', () => {
+      const defaultCb = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {},
+      );
+
+      // Access private fields via any cast for verification
+      expect((defaultCb as any).failureThreshold).toBe(5);
+      expect((defaultCb as any).cooldownMinutes).toBe(60);
     });
   });
 });

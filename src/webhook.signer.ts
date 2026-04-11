@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import { Injectable } from '@nestjs/common';
 
 export interface SignatureHeaders {
+  [key: string]: string;
   'webhook-id': string;
   'webhook-timestamp': string;
   'webhook-signature': string;

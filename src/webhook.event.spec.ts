@@ -22,6 +22,13 @@ class OrderPaidEvent extends WebhookEvent {
   }
 }
 
+// Subclass that does NOT define static eventType — should fail the LSP guard
+class BadEvent extends WebhookEvent {
+  constructor(public readonly data: string) {
+    super();
+  }
+}
+
 describe('WebhookEvent', () => {
   it('should expose eventType from static property', () => {
     const event = new OrderCreatedEvent('ord_1', 100);
@@ -54,5 +61,25 @@ describe('WebhookEvent', () => {
       paymentId: 'pay_1',
     });
     expect(JSON.parse(JSON.stringify(payload))).toEqual(payload);
+  });
+
+  it('should throw when a subclass does not define static eventType', () => {
+    const event = new BadEvent('test');
+
+    expect(() => event.eventType).toThrow(
+      'BadEvent must define static readonly eventType',
+    );
+  });
+
+  it('should throw with correct class name in the error message', () => {
+    class AnotherBadEvent extends WebhookEvent {
+      constructor() {
+        super();
+      }
+    }
+
+    const event = new AnotherBadEvent();
+
+    expect(() => event.eventType).toThrow('AnotherBadEvent must define');
   });
 });
