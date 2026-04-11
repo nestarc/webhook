@@ -5,6 +5,15 @@ import {
   UpdateEndpointDto,
 } from '../interfaces/webhook-endpoint.interface';
 
+const ENDPOINT_COLUMNS = `
+  id, url, secret, events, active, description, metadata,
+  tenant_id AS "tenantId",
+  consecutive_failures AS "consecutiveFailures",
+  disabled_at AS "disabledAt",
+  disabled_reason AS "disabledReason",
+  created_at AS "createdAt",
+  updated_at AS "updatedAt"`;
+
 @Injectable()
 export class PrismaEndpointRepository implements WebhookEndpointRepository {
   constructor(private readonly prisma: any) {}
@@ -14,16 +23,22 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     tenantId: string | undefined,
   ): Promise<EndpointRecord[]> {
     if (tenantId !== undefined) {
-      return this.prisma.$queryRaw<EndpointRecord[]>`
-        SELECT * FROM webhook_endpoints
-        WHERE active = true
-          AND tenant_id = ${tenantId}
-          AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
+      const rows: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+        `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
+         WHERE active = true AND tenant_id = $1
+           AND ($2 = ANY(events) OR '*' = ANY(events))`,
+        tenantId,
+        eventType,
+      );
+      return rows;
     }
-    return this.prisma.$queryRaw<EndpointRecord[]>`
-      SELECT * FROM webhook_endpoints
-      WHERE active = true
-        AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
+    const rows: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+      `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
+       WHERE active = true
+         AND ($1 = ANY(events) OR '*' = ANY(events))`,
+      eventType,
+    );
+    return rows;
   }
 
   async findMatchingEndpointsInTransaction(
@@ -32,16 +47,22 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     tenantId: string | undefined,
   ): Promise<EndpointRecord[]> {
     if (tenantId !== undefined) {
-      return tx.$queryRaw<EndpointRecord[]>`
-        SELECT * FROM webhook_endpoints
-        WHERE active = true
-          AND tenant_id = ${tenantId}
-          AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
+      const rows: EndpointRecord[] = await tx.$queryRawUnsafe(
+        `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
+         WHERE active = true AND tenant_id = $1
+           AND ($2 = ANY(events) OR '*' = ANY(events))`,
+        tenantId,
+        eventType,
+      );
+      return rows;
     }
-    return tx.$queryRaw<EndpointRecord[]>`
-      SELECT * FROM webhook_endpoints
-      WHERE active = true
-        AND (${eventType} = ANY(events) OR '*' = ANY(events))`;
+    const rows: EndpointRecord[] = await tx.$queryRawUnsafe(
+      `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
+       WHERE active = true
+         AND ($1 = ANY(events) OR '*' = ANY(events))`,
+      eventType,
+    );
+    return rows;
   }
 
   async createEndpoint(
@@ -52,35 +73,41 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     metadata: Record<string, unknown> | null,
     tenantId: string | null,
   ): Promise<EndpointRecord> {
-    const [endpoint] = await this.prisma.$queryRaw<EndpointRecord[]>`
-      INSERT INTO webhook_endpoints (url, secret, events, description, metadata, tenant_id)
-      VALUES (
-        ${url},
-        ${secret},
-        ${events}::varchar[],
-        ${description},
-        ${metadata ? JSON.stringify(metadata) : null}::jsonb,
-        ${tenantId}
-      )
-      RETURNING *`;
+    const [endpoint]: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+      `INSERT INTO webhook_endpoints (url, secret, events, description, metadata, tenant_id)
+       VALUES ($1, $2, $3::varchar[], $4, $5::jsonb, $6)
+       RETURNING ${ENDPOINT_COLUMNS}`,
+      url,
+      secret,
+      events,
+      description,
+      metadata ? JSON.stringify(metadata) : null,
+      tenantId,
+    );
     return endpoint;
   }
 
   async getEndpoint(id: string): Promise<EndpointRecord | null> {
-    const results = await this.prisma.$queryRaw<EndpointRecord[]>`
-      SELECT * FROM webhook_endpoints WHERE id = ${id}::uuid`;
+    const results: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+      `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE id = $1::uuid`,
+      id,
+    );
     return results[0] ?? null;
   }
 
   async listEndpoints(tenantId?: string): Promise<EndpointRecord[]> {
     if (tenantId) {
-      return this.prisma.$queryRaw<EndpointRecord[]>`
-        SELECT * FROM webhook_endpoints
-        WHERE tenant_id = ${tenantId}
-        ORDER BY created_at DESC`;
+      const filtered: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+        `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
+         WHERE tenant_id = $1 ORDER BY created_at DESC`,
+        tenantId,
+      );
+      return filtered;
     }
-    return this.prisma.$queryRaw<EndpointRecord[]>`
-      SELECT * FROM webhook_endpoints ORDER BY created_at DESC`;
+    const all: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+      `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints ORDER BY created_at DESC`,
+    );
+    return all;
   }
 
   async updateEndpoint(
@@ -117,7 +144,7 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
       UPDATE webhook_endpoints
       SET ${setClauses.join(', ')}
       WHERE id = $${paramIndex}::uuid
-      RETURNING *`;
+      RETURNING ${ENDPOINT_COLUMNS}`;
 
     const results: EndpointRecord[] = await this.prisma.$queryRawUnsafe(query, ...values);
     return results[0] ?? null;

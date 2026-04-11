@@ -39,6 +39,7 @@ describe('WebhookEndpointAdminService', () => {
       mocks.eventRepo as unknown as WebhookEventRepository,
       mocks.deliveryRepo as unknown as WebhookDeliveryRepository,
       mocks.signer,
+      {}, // options — allowPrivateUrls defaults to false
     );
   });
 
@@ -83,6 +84,38 @@ describe('WebhookEndpointAdminService', () => {
           url: 'https://example.com', events: ['*'], secret: shortSecret,
         }),
       ).rejects.toThrow('at least 16 bytes');
+    });
+  });
+
+  describe('SSRF protection', () => {
+    it('should reject private IP in createEndpoint', async () => {
+      await expect(
+        service.createEndpoint({ url: 'http://10.0.0.1/hook', events: ['*'] }),
+      ).rejects.toThrow('private address');
+    });
+
+    it('should reject localhost in createEndpoint', async () => {
+      await expect(
+        service.createEndpoint({ url: 'http://localhost/hook', events: ['*'] }),
+      ).rejects.toThrow('loopback');
+    });
+
+    it('should reject metadata IP in createEndpoint', async () => {
+      await expect(
+        service.createEndpoint({ url: 'http://169.254.169.254/meta', events: ['*'] }),
+      ).rejects.toThrow();
+    });
+
+    it('should reject private IP in updateEndpoint', async () => {
+      await expect(
+        service.updateEndpoint('ep-1', { url: 'http://192.168.1.1/hook' }),
+      ).rejects.toThrow('private address');
+    });
+
+    it('should allow update without URL change', async () => {
+      mocks.endpointRepo.updateEndpoint.mockResolvedValueOnce(makeEndpoint({ active: false }));
+      const result = await service.updateEndpoint('ep-1', { active: false });
+      expect(result!.active).toBe(false);
     });
   });
 

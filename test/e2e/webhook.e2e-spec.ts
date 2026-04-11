@@ -99,6 +99,7 @@ describe('Webhook E2E', () => {
             interval: 60_000, // Don't auto-poll, we'll call manually
             batchSize: 10,
           },
+          allowPrivateUrls: true, // E2E tests use localhost
         }),
       ],
     }).compile();
@@ -158,6 +159,25 @@ describe('Webhook E2E', () => {
     const logs = await adminService.getDeliveryLogs(endpoint.id);
     expect(logs).toHaveLength(1);
     expect(logs[0].status).toBe('SENT');
+
+    // Verify camelCase shape on EndpointRecord
+    expect(endpoint.tenantId).toBeNull(); // null, not undefined
+    expect(endpoint.consecutiveFailures).toBe(0);
+    expect(endpoint.createdAt).toBeInstanceOf(Date);
+    expect(endpoint.updatedAt).toBeInstanceOf(Date);
+    expect(endpoint).not.toHaveProperty('tenant_id');
+    expect(endpoint).not.toHaveProperty('consecutive_failures');
+
+    // Verify camelCase shape on DeliveryRecord
+    const log = logs[0];
+    expect(log.eventId).toBeDefined();
+    expect(log.endpointId).toBe(endpoint.id);
+    expect(log.maxAttempts).toBe(3);
+    expect(log.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(log.completedAt).toBeInstanceOf(Date);
+    expect(log).not.toHaveProperty('event_id');
+    expect(log).not.toHaveProperty('endpoint_id');
+    expect(log).not.toHaveProperty('max_attempts');
   });
 
   it('should not deliver to endpoints not subscribed to the event', async () => {

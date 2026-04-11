@@ -27,6 +27,8 @@ export interface WebhookModuleOptions {
   delivery?: DeliveryOptions;
   circuitBreaker?: CircuitBreakerOptions;
   polling?: PollingOptions;
+  /** Allow private/internal URLs for endpoints. Only enable in development/testing. Default: false */
+  allowPrivateUrls?: boolean;
   /** Custom port overrides — provide these to replace default Prisma/fetch adapters. */
   eventRepository?: WebhookEventRepository;
   endpointRepository?: WebhookEndpointRepository;

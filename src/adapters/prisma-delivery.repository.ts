@@ -140,7 +140,17 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     const limit = filters?.limit ?? 50;
     const offset = filters?.offset ?? 0;
     const query = `
-      SELECT d.*
+      SELECT d.id, d.status, d.attempts,
+             d.event_id AS "eventId",
+             d.endpoint_id AS "endpointId",
+             d.max_attempts AS "maxAttempts",
+             d.next_attempt_at AS "nextAttemptAt",
+             d.last_attempt_at AS "lastAttemptAt",
+             d.completed_at AS "completedAt",
+             d.response_status AS "responseStatus",
+             d.response_body AS "responseBody",
+             d.latency_ms AS "latencyMs",
+             d.last_error AS "lastError"
       FROM webhook_deliveries d
       JOIN webhook_events ev ON ev.id = d.event_id
       WHERE ${conditions.join(' AND ')}

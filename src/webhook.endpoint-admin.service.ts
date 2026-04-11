@@ -4,7 +4,9 @@ import {
   WEBHOOK_DELIVERY_REPOSITORY,
   WEBHOOK_ENDPOINT_REPOSITORY,
   WEBHOOK_EVENT_REPOSITORY,
+  WEBHOOK_MODULE_OPTIONS,
 } from './webhook.constants';
+import { WebhookModuleOptions } from './interfaces/webhook-options.interface';
 import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
 import { WebhookEventRepository } from './ports/webhook-event.repository';
 import { WebhookDeliveryRepository } from './ports/webhook-delivery.repository';
@@ -13,10 +15,12 @@ import {
   EndpointRecord,
   UpdateEndpointDto,
 } from './interfaces/webhook-endpoint.interface';
+import { validateWebhookUrl } from './webhook.url-validator';
 
 @Injectable()
 export class WebhookEndpointAdminService {
   private readonly logger = new Logger(WebhookEndpointAdminService.name);
+  private readonly allowPrivateUrls: boolean;
 
   constructor(
     @Inject(WEBHOOK_ENDPOINT_REPOSITORY)
@@ -26,9 +30,17 @@ export class WebhookEndpointAdminService {
     @Inject(WEBHOOK_DELIVERY_REPOSITORY)
     private readonly deliveryRepo: WebhookDeliveryRepository,
     private readonly signer: WebhookSigner,
-  ) {}
+    @Inject(WEBHOOK_MODULE_OPTIONS)
+    options: WebhookModuleOptions,
+  ) {
+    this.allowPrivateUrls = options.allowPrivateUrls ?? false;
+  }
 
   async createEndpoint(dto: CreateEndpointDto): Promise<EndpointRecord> {
+    if (!this.allowPrivateUrls) {
+      validateWebhookUrl(dto.url);
+    }
+
     let secret: string;
     if (!dto.secret || dto.secret === 'auto') {
       secret = this.signer.generateSecret();
@@ -62,6 +74,9 @@ export class WebhookEndpointAdminService {
     endpointId: string,
     dto: UpdateEndpointDto,
   ): Promise<EndpointRecord | null> {
+    if (dto.url && !this.allowPrivateUrls) {
+      validateWebhookUrl(dto.url);
+    }
     return this.endpointRepo.updateEndpoint(endpointId, dto);
   }
 
