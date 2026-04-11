@@ -25,6 +25,7 @@ export class FetchHttpClient implements WebhookHttpClient {
         },
         body,
         signal: controller.signal,
+        redirect: 'manual',
       });
 
       const latencyMs = Date.now() - start;

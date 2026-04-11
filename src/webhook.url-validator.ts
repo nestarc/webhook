@@ -1,4 +1,5 @@
 import * as net from 'net';
+import * as dns from 'dns';
 
 const BLOCKED_HOSTNAMES = new Set([
   'localhost',
@@ -7,7 +8,7 @@ const BLOCKED_HOSTNAMES = new Set([
   'ip6-loopback',
 ]);
 
-export function validateWebhookUrl(url: string): void {
+export async function validateWebhookUrl(url: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -34,53 +35,100 @@ export function validateWebhookUrl(url: string): void {
   } else if (net.isIPv6(hostname) || hostname.startsWith('[')) {
     const cleanIp = hostname.replace(/^\[|\]$/g, '');
     validateIPv6(cleanIp);
+  } else {
+    // Hostname — resolve DNS and validate all resolved IPs
+    await validateDnsResolution(hostname);
   }
 }
 
 function validateIPv4(ip: string): void {
   const parts = ip.split('.').map(Number);
 
-  // 127.0.0.0/8 — loopback
   if (parts[0] === 127) {
     throw new Error(`Invalid webhook URL: "${ip}" is a loopback address`);
   }
-  // 10.0.0.0/8 — private class A
   if (parts[0] === 10) {
     throw new Error(`Invalid webhook URL: "${ip}" is a private address`);
   }
-  // 172.16.0.0/12 — private class B
   if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
     throw new Error(`Invalid webhook URL: "${ip}" is a private address`);
   }
-  // 192.168.0.0/16 — private class C
   if (parts[0] === 192 && parts[1] === 168) {
     throw new Error(`Invalid webhook URL: "${ip}" is a private address`);
   }
-  // 169.254.0.0/16 — link-local / cloud metadata
   if (parts[0] === 169 && parts[1] === 254) {
     throw new Error(
       `Invalid webhook URL: "${ip}" is a link-local/metadata address`,
     );
   }
-  // 0.0.0.0
   if (parts[0] === 0) {
     throw new Error(`Invalid webhook URL: "${ip}" is not a valid target`);
   }
 }
 
 function validateIPv6(ip: string): void {
-  // ::1 — loopback
   if (ip === '::1') {
     throw new Error(`Invalid webhook URL: "${ip}" is a loopback address`);
   }
-  // fc00::/7 — unique local (private)
+
+  const lowerIp = ip.toLowerCase();
+
+  // IPv4-mapped IPv6 — ::ffff:x.x.x.x or ::ffff:HHHH:HHHH (hex form)
+  if (lowerIp.startsWith('::ffff:') || lowerIp.startsWith('0:0:0:0:0:ffff:')) {
+    const suffix = lowerIp.replace(/^(::ffff:|0:0:0:0:0:ffff:)/, '');
+    let ipv4: string;
+
+    if (net.isIPv4(suffix)) {
+      // ::ffff:10.0.0.1 form
+      ipv4 = suffix;
+    } else {
+      // ::ffff:a00:1 form (hex) — convert to IPv4
+      const hexParts = suffix.split(':');
+      if (hexParts.length === 2) {
+        const hi = parseInt(hexParts[0], 16);
+        const lo = parseInt(hexParts[1], 16);
+        ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      } else {
+        return; // Unknown format, let it through (conservative)
+      }
+    }
+
+    validateIPv4(ipv4);
+    return;
+  }
+
   const firstSegment = ip.split(':')[0].toLowerCase();
   if (firstSegment.startsWith('fc') || firstSegment.startsWith('fd')) {
     throw new Error(`Invalid webhook URL: "${ip}" is a private address`);
   }
-  // fe80::/10 — link-local
   if (firstSegment.startsWith('fe8') || firstSegment.startsWith('fe9') ||
       firstSegment.startsWith('fea') || firstSegment.startsWith('feb')) {
     throw new Error(`Invalid webhook URL: "${ip}" is a link-local address`);
+  }
+}
+
+async function validateDnsResolution(hostname: string): Promise<void> {
+  let addresses: string[] = [];
+
+  try {
+    const ipv4 = await dns.promises.resolve4(hostname);
+    addresses = addresses.concat(ipv4);
+  } catch {
+    // No A record — not an error yet
+  }
+
+  try {
+    const ipv6 = await dns.promises.resolve6(hostname);
+    addresses = addresses.concat(ipv6);
+  } catch {
+    // No AAAA record — not an error yet
+  }
+
+  for (const ip of addresses) {
+    if (net.isIPv4(ip)) {
+      validateIPv4(ip); // throws if private
+    } else if (net.isIPv6(ip)) {
+      validateIPv6(ip); // throws if private
+    }
   }
 }

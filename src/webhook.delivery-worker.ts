@@ -6,6 +6,7 @@ import {
   WEBHOOK_DELIVERY_REPOSITORY,
   WEBHOOK_MODULE_OPTIONS,
   DEFAULT_POLLING_BATCH_SIZE,
+  DEFAULT_STALE_SENDING_MINUTES,
 } from './webhook.constants';
 import { WebhookModuleOptions } from './interfaces/webhook-options.interface';
 import {
@@ -17,6 +18,7 @@ import {
 export class WebhookDeliveryWorker implements OnModuleDestroy {
   private readonly logger = new Logger(WebhookDeliveryWorker.name);
   private readonly batchSize: number;
+  private readonly staleSendingMinutes: number;
   private isShuttingDown = false;
   private isPolling = false;
   private activeDeliveries = 0;
@@ -31,6 +33,8 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     options: WebhookModuleOptions,
   ) {
     this.batchSize = options.polling?.batchSize ?? DEFAULT_POLLING_BATCH_SIZE;
+    this.staleSendingMinutes =
+      options.polling?.staleSendingMinutes ?? DEFAULT_STALE_SENDING_MINUTES;
   }
 
   async poll(): Promise<void> {
@@ -40,6 +44,14 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     this.isPolling = true;
     try {
       await this.circuitBreaker.recoverEligibleEndpoints();
+
+      // Recover deliveries stuck in SENDING from crashed workers
+      const recovered = await this.deliveryRepo.recoverStaleSending(
+        this.staleSendingMinutes,
+      );
+      if (recovered > 0) {
+        this.logger.warn(`Recovered ${recovered} stale SENDING deliveries`);
+      }
 
       const claimed = await this.deliveryRepo.claimPendingDeliveries(
         this.batchSize,
@@ -67,12 +79,11 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       const result = await this.dispatcher.dispatch(delivery);
       const newAttempts = delivery.attempts + 1;
 
+      // Persist delivery state — if this fails, catch resets to PENDING (safe)
       if (result.success) {
         await this.deliveryRepo.markSent(delivery.id, newAttempts, result);
-        await this.circuitBreaker.afterDelivery(delivery.endpoint_id, true);
       } else if (newAttempts >= delivery.max_attempts) {
         await this.deliveryRepo.markFailed(delivery.id, newAttempts, result);
-        await this.circuitBreaker.afterDelivery(delivery.endpoint_id, false);
         this.logger.warn(
           `Delivery ${delivery.id} exhausted retries (${newAttempts}/${delivery.max_attempts})`,
         );
@@ -84,7 +95,18 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           nextAt,
           result,
         );
-        await this.circuitBreaker.afterDelivery(delivery.endpoint_id, false);
+      }
+
+      // Circuit breaker — failure here must NOT revert delivery state
+      try {
+        await this.circuitBreaker.afterDelivery(
+          delivery.endpoint_id,
+          result.success,
+        );
+      } catch (cbError) {
+        this.logger.error(
+          `Circuit breaker update failed for ${delivery.endpoint_id}: ${cbError}`,
+        );
       }
     } catch (error) {
       this.logger.error(`Delivery ${delivery.id} processing error: ${error}`);

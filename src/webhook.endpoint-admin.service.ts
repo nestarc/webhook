@@ -38,7 +38,7 @@ export class WebhookEndpointAdminService {
 
   async createEndpoint(dto: CreateEndpointDto): Promise<EndpointRecord> {
     if (!this.allowPrivateUrls) {
-      validateWebhookUrl(dto.url);
+      await validateWebhookUrl(dto.url);
     }
 
     let secret: string;
@@ -75,7 +75,7 @@ export class WebhookEndpointAdminService {
     dto: UpdateEndpointDto,
   ): Promise<EndpointRecord | null> {
     if (dto.url && !this.allowPrivateUrls) {
-      validateWebhookUrl(dto.url);
+      await validateWebhookUrl(dto.url);
     }
     return this.endpointRepo.updateEndpoint(endpointId, dto);
   }

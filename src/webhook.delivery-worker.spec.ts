@@ -16,9 +16,10 @@ function createMockDeliveryRepo() {
     markFailed: jest.fn().mockResolvedValue(undefined),
     markRetry: jest.fn().mockResolvedValue(undefined),
     resetToPending: jest.fn().mockResolvedValue(undefined),
+    recoverStaleSending: jest.fn().mockResolvedValue(0),
   } as jest.Mocked<Pick<
     WebhookDeliveryRepository,
-    'claimPendingDeliveries' | 'enrichDeliveries' | 'markSent' | 'markFailed' | 'markRetry' | 'resetToPending'
+    'claimPendingDeliveries' | 'enrichDeliveries' | 'markSent' | 'markFailed' | 'markRetry' | 'resetToPending' | 'recoverStaleSending'
   >>;
 }
 
@@ -191,6 +192,51 @@ describe('WebhookDeliveryWorker', () => {
       expect(deliveryRepo.resetToPending).toHaveBeenCalledWith('d-err');
     });
 
+    it('should NOT reset to PENDING when markSent succeeds but afterDelivery fails', async () => {
+      const enriched = makeDelivery({ id: 'd-cb1', endpoint_id: 'ep-cb1' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeSuccessResult());
+      deliveryRepo.markSent.mockResolvedValueOnce(undefined);
+      circuitBreaker.afterDelivery.mockRejectedValueOnce(new Error('CB failed'));
+
+      await worker.poll();
+
+      expect(deliveryRepo.markSent).toHaveBeenCalledWith('d-cb1', 1, expect.objectContaining({ success: true }));
+      expect(deliveryRepo.resetToPending).not.toHaveBeenCalled();
+    });
+
+    it('should NOT reset to PENDING when markFailed succeeds but afterDelivery fails', async () => {
+      const enriched = makeDelivery({ id: 'd-cb2', endpoint_id: 'ep-cb2', attempts: 2, max_attempts: 3 });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+      deliveryRepo.markFailed.mockResolvedValueOnce(undefined);
+      circuitBreaker.afterDelivery.mockRejectedValueOnce(new Error('CB failed'));
+
+      await worker.poll();
+
+      expect(deliveryRepo.markFailed).toHaveBeenCalled();
+      expect(deliveryRepo.resetToPending).not.toHaveBeenCalled();
+    });
+
+    it('should NOT reset to PENDING when markRetry succeeds but afterDelivery fails', async () => {
+      const enriched = makeDelivery({ id: 'd-cb3', endpoint_id: 'ep-cb3' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+      deliveryRepo.markRetry.mockResolvedValueOnce(undefined);
+      circuitBreaker.afterDelivery.mockRejectedValueOnce(new Error('CB failed'));
+
+      await worker.poll();
+
+      expect(deliveryRepo.markRetry).toHaveBeenCalled();
+      expect(deliveryRepo.resetToPending).not.toHaveBeenCalled();
+    });
+
     it('should process multiple deliveries in parallel', async () => {
       const d1 = makeDelivery({ id: 'd-p1', endpoint_id: 'ep-p1' });
       const d2 = makeDelivery({ id: 'd-p2', endpoint_id: 'ep-p2' });
@@ -230,6 +276,14 @@ describe('WebhookDeliveryWorker', () => {
       await worker.poll();
 
       expect(circuitBreaker.recoverEligibleEndpoints).toHaveBeenCalledTimes(1);
+    });
+
+    it('should call recoverStaleSending on every poll', async () => {
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([]);
+
+      await worker.poll();
+
+      expect(deliveryRepo.recoverStaleSending).toHaveBeenCalledWith(5);
     });
   });
 

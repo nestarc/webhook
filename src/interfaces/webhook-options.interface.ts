@@ -19,6 +19,8 @@ export interface CircuitBreakerOptions {
 export interface PollingOptions {
   interval?: number;
   batchSize?: number;
+  /** Minutes before a SENDING delivery is considered stale and reset to PENDING. Default: 5 */
+  staleSendingMinutes?: number;
 }
 
 export interface WebhookModuleOptions {

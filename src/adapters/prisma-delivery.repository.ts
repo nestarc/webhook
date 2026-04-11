@@ -112,6 +112,17 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       WHERE id = ${deliveryId}::uuid`;
   }
 
+  async recoverStaleSending(stalenessMinutes: number): Promise<number> {
+    const interval = `${stalenessMinutes} minutes`;
+    const recovered = await this.prisma.$queryRaw<{ id: string }[]>`
+      UPDATE webhook_deliveries
+      SET status = 'PENDING'
+      WHERE status = 'SENDING'
+        AND next_attempt_at + ${interval}::interval < NOW()
+      RETURNING id`;
+    return recovered.length;
+  }
+
   async getDeliveryLogs(
     endpointId: string,
     filters?: DeliveryLogFilters,
