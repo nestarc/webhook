@@ -124,17 +124,54 @@ describe('WebhookAdminService', () => {
   });
 
   describe('updateEndpoint', () => {
-    it('should update endpoint fields', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([
-        { id: 'ep-1', url: 'https://new-url.com' },
-      ]);
+    it('should build SET clause for all fields with correct parameter order', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: 'ep-1' }]);
 
-      const result = await admin.updateEndpoint('ep-1', {
-        url: 'https://new-url.com',
+      await admin.updateEndpoint('ep-1', {
+        url: 'https://new.com',
+        events: ['order.*'],
+        description: 'updated',
+        metadata: { key: 'val' },
+        active: false,
       });
 
-      expect(result).not.toBeNull();
-      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
+      // 5 SET fields + endpoint ID = 6 params
+      expect(params).toHaveLength(6);
+      expect(sql).toContain('url = $1');
+      expect(sql).toContain('events = $2');
+      expect(sql).toContain('description = $3');
+      expect(sql).toContain('metadata = $4');
+      expect(sql).toContain('active = $5');
+      expect(sql).toContain('WHERE id = $6::uuid');
+
+      // Verify param values and order
+      expect(params[0]).toBe('https://new.com');
+      expect(params[1]).toEqual(['order.*']);
+      expect(params[2]).toBe('updated');
+      expect(params[3]).toBe('{"key":"val"}');
+      expect(params[4]).toBe(false);
+      expect(params[5]).toBe('ep-1');
+    });
+
+    it('should handle single field (active) update with correct indices', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: 'ep-1' }]);
+
+      await admin.updateEndpoint('ep-1', { active: false });
+
+      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
+      expect(sql).toContain('active = $1');
+      expect(sql).toContain('WHERE id = $2::uuid');
+      expect(params).toEqual([false, 'ep-1']);
+    });
+
+    it('should pass metadata as JSON string parameter', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: 'ep-1' }]);
+
+      await admin.updateEndpoint('ep-1', { metadata: { nested: { a: 1 } } });
+
+      const params = prisma.$queryRawUnsafe.mock.calls[0].slice(1);
+      expect(params[0]).toBe('{"nested":{"a":1}}');
     });
 
     it('should return null when endpoint not found', async () => {
@@ -207,26 +244,64 @@ describe('WebhookAdminService', () => {
   });
 
   describe('getDeliveryLogs', () => {
-    it('should return delivery logs for endpoint', async () => {
-      prisma.$queryRawUnsafe.mockResolvedValueOnce([
-        { id: 'del-1', status: 'SENT' },
-        { id: 'del-2', status: 'FAILED' },
-      ]);
+    it('should use default limit=50 and offset=0 when no filters', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
-      const result = await admin.getDeliveryLogs('ep-1');
+      await admin.getDeliveryLogs('ep-1');
 
-      expect(result).toHaveLength(2);
+      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
+      expect(sql).toContain('LIMIT $2');
+      expect(sql).toContain('OFFSET $3');
+      expect(params[0]).toBe('ep-1');
+      expect(params[1]).toBe(50);  // default limit
+      expect(params[2]).toBe(0);   // default offset
     });
 
-    it('should support filtering by status', async () => {
+    it('should build WHERE clause with all filter combinations', async () => {
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+      const since = new Date('2026-01-01');
+      const until = new Date('2026-12-31');
+
+      await admin.getDeliveryLogs('ep-1', {
+        status: 'FAILED',
+        eventType: 'order.created',
+        since,
+        until,
+        limit: 10,
+        offset: 5,
+      });
+
+      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
+
+      // 4 WHERE conditions + limit + offset = 6 params (+ endpoint_id = 7 total)
+      expect(sql).toContain('d.endpoint_id = $1');
+      expect(sql).toContain('d.status = $2');
+      expect(sql).toContain('ev.event_type = $3');
+      expect(sql).toContain('d.last_attempt_at >= $4');
+      expect(sql).toContain('d.last_attempt_at <= $5');
+      expect(sql).toContain('LIMIT $6');
+      expect(sql).toContain('OFFSET $7');
+
+      expect(params[0]).toBe('ep-1');
+      expect(params[1]).toBe('FAILED');
+      expect(params[2]).toBe('order.created');
+      expect(params[3]).toBe(since);
+      expect(params[4]).toBe(until);
+      expect(params[5]).toBe(10);
+      expect(params[6]).toBe(5);
+    });
+
+    it('should support filtering by status only', async () => {
       prisma.$queryRawUnsafe.mockResolvedValueOnce([
         { id: 'del-2', status: 'FAILED' },
       ]);
 
-      const result = await admin.getDeliveryLogs('ep-1', { status: 'FAILED' });
+      await admin.getDeliveryLogs('ep-1', { status: 'FAILED' });
 
-      expect(result).toHaveLength(1);
-      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+      const [sql, ...params] = prisma.$queryRawUnsafe.mock.calls[0];
+      expect(sql).toContain('d.status = $2');
+      expect(params[1]).toBe('FAILED');
     });
   });
 });

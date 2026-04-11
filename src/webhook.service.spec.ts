@@ -88,7 +88,7 @@ describe('WebhookService', () => {
   });
 
   describe('sendToTenant', () => {
-    it('should filter endpoints by tenantId', async () => {
+    it('should include tenant_id in endpoint query and event insert', async () => {
       const eventId = 'evt-789';
       txClient.$queryRaw
         .mockResolvedValueOnce([{ id: eventId }])
@@ -97,11 +97,41 @@ describe('WebhookService', () => {
         ]);
       txClient.$executeRawUnsafe.mockResolvedValueOnce(1);
 
-      const result = await service.sendToTenant('tenant-1', new TestEvent('t3'));
+      await service.sendToTenant('tenant-1', new TestEvent('t3'));
 
-      expect(result).toBe(eventId);
-      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-      expect(txClient.$queryRaw).toHaveBeenCalledTimes(2);
+      // Tagged template calls: $queryRaw`...${val}...` → mock receives (TemplateStringsArray, ...values)
+      // 1st call = event INSERT
+      const eventInsertArgs = txClient.$queryRaw.mock.calls[0];
+      const eventInsertSqlParts: string[] = Array.from(eventInsertArgs[0]);
+      const eventInsertSql = eventInsertSqlParts.join('?');
+      expect(eventInsertSql).toContain('webhook_events');
+      // Interpolated values follow the template strings array
+      const eventInsertValues = eventInsertArgs.slice(1);
+      expect(eventInsertValues).toContain('tenant-1');
+
+      // 2nd call = endpoint SELECT — should contain tenant_id filter
+      const endpointArgs = txClient.$queryRaw.mock.calls[1];
+      const endpointSqlParts: string[] = Array.from(endpointArgs[0]);
+      const endpointSql = endpointSqlParts.join('?');
+      expect(endpointSql).toContain('tenant_id');
+      const endpointValues = endpointArgs.slice(1);
+      expect(endpointValues).toContain('tenant-1');
+    });
+
+    it('should not include tenant_id filter in send() without tenant', async () => {
+      txClient.$queryRaw
+        .mockResolvedValueOnce([{ id: 'evt-no-tenant' }])
+        .mockResolvedValueOnce([]);
+
+      await service.send(new TestEvent('t4'));
+
+      // 2nd call = endpoint SELECT — should NOT contain tenant_id
+      const endpointCall = txClient.$queryRaw.mock.calls[1];
+      const endpointStrings = endpointCall[0]?.strings ?? endpointCall[0];
+      const endpointSql = Array.isArray(endpointStrings)
+        ? endpointStrings.join('?')
+        : String(endpointStrings);
+      expect(endpointSql).not.toContain('tenant_id');
     });
   });
 });
