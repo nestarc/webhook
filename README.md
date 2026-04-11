@@ -139,6 +139,7 @@ export class WebhookController {
 |--------|-------------|
 | `send(event)` | Publish event to all matching endpoints |
 | `sendToTenant(tenantId, event)` | Publish to tenant-specific endpoints only |
+| `sendToEndpoints(endpointIds, event)` | Publish to specific endpoint IDs only |
 
 ### WebhookEndpointAdminService
 
@@ -166,7 +167,7 @@ export class WebhookController {
 | `verify(eventId, timestamp, body, secret, signature)` | Verify a webhook signature |
 | `generateSecret()` | Generate a random base64 signing secret |
 
-> **Deprecated:** `WebhookAdminService` is a facade that delegates to `WebhookEndpointAdminService` and `WebhookDeliveryAdminService`. It will be removed in v0.3.0.
+> **Deprecated:** `WebhookAdminService` is a facade that delegates to `WebhookEndpointAdminService` and `WebhookDeliveryAdminService`. It will be removed in a future release.
 
 ## Configuration
 
@@ -182,6 +183,7 @@ export class WebhookController {
 | `polling.batchSize` | `50` | Max deliveries per poll cycle |
 | `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
+| `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
 
 ### Custom adapters
 
@@ -194,6 +196,7 @@ WebhookModule.forRoot({
   eventRepository: myCustomEventRepo,      // implements WebhookEventRepository
   endpointRepository: myCustomEndpointRepo,// implements WebhookEndpointRepository
   deliveryRepository: myCustomDeliveryRepo,// implements WebhookDeliveryRepository
+  secretVault: myCustomVault,              // implements WebhookSecretVault
 });
 ```
 
@@ -239,6 +242,7 @@ webhook-signature: v1,<base64-hmac-sha256>
 - Signing secrets are excluded from read queries (`listEndpoints`, `getEndpoint`)
 - Secrets are only returned on `createEndpoint` (initial provisioning)
 - Delivery enrichment uses an internal path that does not expose secrets through admin APIs
+- **At-rest encryption** — provide a custom `WebhookSecretVault` to encrypt secrets before storage and decrypt before HMAC signing. The default `PlaintextSecretVault` passes values through unchanged.
 
 ## Webhook Payload Format
 
