@@ -92,7 +92,7 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     const encryptedSecret = this.vault ? await this.vault.encrypt(secret) : secret;
     const [endpoint]: EndpointRecordWithSecret[] = await this.prisma.$queryRawUnsafe(
       `INSERT INTO webhook_endpoints (url, secret, events, description, metadata, tenant_id)
-       VALUES ($1, $2, $3::varchar[], $4, $5::jsonb, $6)
+       VALUES ($1, $2, $3::varchar[], $4, $5::jsonb, $6::uuid)
        RETURNING ${ENDPOINT_COLUMNS_WITH_SECRET}`,
       url,
       encryptedSecret,

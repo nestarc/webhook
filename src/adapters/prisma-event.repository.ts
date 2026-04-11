@@ -12,7 +12,7 @@ export class PrismaEventRepository implements WebhookEventRepository {
   ): Promise<string> {
     const [saved] = await this.prisma.$queryRaw<{ id: string }[]>`
       INSERT INTO webhook_events (event_type, payload, tenant_id)
-      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId})
+      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId}::uuid)
       RETURNING id`;
     return saved.id;
   }
@@ -25,7 +25,7 @@ export class PrismaEventRepository implements WebhookEventRepository {
   ): Promise<string> {
     const [saved] = await tx.$queryRaw<{ id: string }[]>`
       INSERT INTO webhook_events (event_type, payload, tenant_id)
-      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId})
+      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId}::uuid)
       RETURNING id`;
     return saved.id;
   }
