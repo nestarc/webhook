@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
   event_id        UUID         NOT NULL REFERENCES webhook_events(id),
   endpoint_id     UUID         NOT NULL REFERENCES webhook_endpoints(id),
-  status          VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+  status          VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
+                  CHECK (status IN ('PENDING', 'SENDING', 'SENT', 'FAILED')),
   attempts        INT          NOT NULL DEFAULT 0,
   max_attempts    INT          NOT NULL DEFAULT 5,
   next_attempt_at TIMESTAMPTZ,
@@ -63,6 +64,11 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   CONSTRAINT fk_delivery_event    FOREIGN KEY (event_id)    REFERENCES webhook_events(id),
   CONSTRAINT fk_delivery_endpoint FOREIGN KEY (endpoint_id) REFERENCES webhook_endpoints(id)
 );
+
+-- Migration for existing databases:
+-- ALTER TABLE webhook_deliveries
+--   ADD CONSTRAINT chk_delivery_status
+--   CHECK (status IN ('PENDING', 'SENDING', 'SENT', 'FAILED'));
 
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status_next
   ON webhook_deliveries (status, next_attempt_at);

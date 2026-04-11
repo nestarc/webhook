@@ -8,10 +8,14 @@ import {
   DeliveryRecord,
   DeliveryResult,
 } from '../interfaces/webhook-delivery.interface';
+import { WebhookSecretVault } from '../ports/webhook-secret-vault';
 
 @Injectable()
 export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
-  constructor(private readonly prisma: any) {}
+  constructor(
+    private readonly prisma: any,
+    private readonly vault?: WebhookSecretVault,
+  ) {}
 
   async createDeliveriesInTransaction(
     tx: any,
@@ -54,7 +58,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
   }
 
   async enrichDeliveries(deliveryIds: string[]): Promise<PendingDelivery[]> {
-    return this.prisma.$queryRaw<PendingDelivery[]>`
+    const rows = await this.prisma.$queryRaw<PendingDelivery[]>`
       SELECT
         d.id, d.event_id, d.endpoint_id, d.attempts, d.max_attempts,
         e.url, e.secret,
@@ -63,6 +67,13 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       JOIN webhook_endpoints e ON e.id = d.endpoint_id
       JOIN webhook_events ev ON ev.id = d.event_id
       WHERE d.id = ANY(${deliveryIds}::uuid[])`;
+
+    if (this.vault) {
+      for (const row of rows) {
+        row.secret = await this.vault.decrypt(row.secret);
+      }
+    }
+    return rows;
   }
 
   async markSent(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void> {

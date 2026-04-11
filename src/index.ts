@@ -24,12 +24,14 @@ export type {
   PendingDelivery,
 } from './ports/webhook-delivery.repository';
 export type { WebhookHttpClient } from './ports/webhook-http-client';
+export type { WebhookSecretVault } from './ports/webhook-secret-vault';
 
 // Default adapters
 export { PrismaEventRepository } from './adapters/prisma-event.repository';
 export { PrismaEndpointRepository } from './adapters/prisma-endpoint.repository';
 export { PrismaDeliveryRepository } from './adapters/prisma-delivery.repository';
 export { FetchHttpClient } from './adapters/fetch-http-client';
+export { PlaintextSecretVault } from './adapters/plaintext-secret-vault';
 
 // Option types
 export type {

@@ -5,6 +5,7 @@ import {
   EndpointRecordWithSecret,
   UpdateEndpointDto,
 } from '../interfaces/webhook-endpoint.interface';
+import { WebhookSecretVault } from '../ports/webhook-secret-vault';
 
 /** Public columns — excludes secret */
 const ENDPOINT_COLUMNS = `
@@ -28,7 +29,10 @@ const ENDPOINT_COLUMNS_WITH_SECRET = `
 
 @Injectable()
 export class PrismaEndpointRepository implements WebhookEndpointRepository {
-  constructor(private readonly prisma: any) {}
+  constructor(
+    private readonly prisma: any,
+    private readonly vault?: WebhookSecretVault,
+  ) {}
 
   async findMatchingEndpoints(
     eventType: string,
@@ -37,7 +41,7 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     if (tenantId !== undefined) {
       const rows: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
         `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
-         WHERE active = true AND tenant_id = $1
+         WHERE active = true AND tenant_id::text = $1
            AND ($2 = ANY(events) OR '*' = ANY(events))`,
         tenantId,
         eventType,
@@ -61,7 +65,7 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     if (tenantId !== undefined) {
       const rows: EndpointRecord[] = await tx.$queryRawUnsafe(
         `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
-         WHERE active = true AND tenant_id = $1
+         WHERE active = true AND tenant_id::text = $1
            AND ($2 = ANY(events) OR '*' = ANY(events))`,
         tenantId,
         eventType,
@@ -85,12 +89,13 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     metadata: Record<string, unknown> | null,
     tenantId: string | null,
   ): Promise<EndpointRecordWithSecret> {
+    const encryptedSecret = this.vault ? await this.vault.encrypt(secret) : secret;
     const [endpoint]: EndpointRecordWithSecret[] = await this.prisma.$queryRawUnsafe(
       `INSERT INTO webhook_endpoints (url, secret, events, description, metadata, tenant_id)
        VALUES ($1, $2, $3::varchar[], $4, $5::jsonb, $6)
        RETURNING ${ENDPOINT_COLUMNS_WITH_SECRET}`,
       url,
-      secret,
+      encryptedSecret,
       events,
       description,
       metadata ? JSON.stringify(metadata) : null,
@@ -111,7 +116,7 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     if (tenantId) {
       const filtered: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
         `SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints
-         WHERE tenant_id = $1 ORDER BY created_at DESC`,
+         WHERE tenant_id::text = $1 ORDER BY created_at DESC`,
         tenantId,
       );
       return filtered;

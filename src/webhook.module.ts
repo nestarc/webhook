@@ -34,8 +34,10 @@ import { PrismaEventRepository } from './adapters/prisma-event.repository';
 import { PrismaEndpointRepository } from './adapters/prisma-endpoint.repository';
 import { PrismaDeliveryRepository } from './adapters/prisma-delivery.repository';
 import { FetchHttpClient } from './adapters/fetch-http-client';
+import { PlaintextSecretVault } from './adapters/plaintext-secret-vault';
 
 function createPortProviders(options: WebhookModuleOptions): Provider[] {
+  const vault = options.secretVault ?? new PlaintextSecretVault();
   return [
     {
       provide: WEBHOOK_EVENT_REPOSITORY,
@@ -46,13 +48,13 @@ function createPortProviders(options: WebhookModuleOptions): Provider[] {
       provide: WEBHOOK_ENDPOINT_REPOSITORY,
       useFactory: () =>
         options.endpointRepository ??
-        new PrismaEndpointRepository(options.prisma),
+        new PrismaEndpointRepository(options.prisma, vault),
     },
     {
       provide: WEBHOOK_DELIVERY_REPOSITORY,
       useFactory: () =>
         options.deliveryRepository ??
-        new PrismaDeliveryRepository(options.prisma),
+        new PrismaDeliveryRepository(options.prisma, vault),
     },
     {
       provide: WEBHOOK_HTTP_CLIENT,
@@ -71,14 +73,18 @@ function createAsyncPortProviders(): Provider[] {
     },
     {
       provide: WEBHOOK_ENDPOINT_REPOSITORY,
-      useFactory: (opts: WebhookModuleOptions) =>
-        opts.endpointRepository ?? new PrismaEndpointRepository(opts.prisma),
+      useFactory: (opts: WebhookModuleOptions) => {
+        const vault = opts.secretVault ?? new PlaintextSecretVault();
+        return opts.endpointRepository ?? new PrismaEndpointRepository(opts.prisma, vault);
+      },
       inject: [WEBHOOK_MODULE_OPTIONS],
     },
     {
       provide: WEBHOOK_DELIVERY_REPOSITORY,
-      useFactory: (opts: WebhookModuleOptions) =>
-        opts.deliveryRepository ?? new PrismaDeliveryRepository(opts.prisma),
+      useFactory: (opts: WebhookModuleOptions) => {
+        const vault = opts.secretVault ?? new PlaintextSecretVault();
+        return opts.deliveryRepository ?? new PrismaDeliveryRepository(opts.prisma, vault);
+      },
       inject: [WEBHOOK_MODULE_OPTIONS],
     },
     {
