@@ -37,6 +37,44 @@ export class WebhookService {
     return this.sendInternal(event, tenantId);
   }
 
+  async sendToEndpoints(
+    endpointIds: string[],
+    event: WebhookEvent,
+    tenantId?: string,
+  ): Promise<string> {
+    const payload = event.toPayload();
+    const eventType = event.eventType;
+
+    return this.deliveryRepo.runInTransaction(async (tx) => {
+      const eventId = await this.eventRepo.saveEventInTransaction(
+        tx,
+        eventType,
+        payload,
+        tenantId ?? null,
+      );
+
+      if (endpointIds.length === 0) {
+        this.logger.debug(
+          `No endpoint IDs provided for event ${eventType} (eventId=${eventId})`,
+        );
+        return eventId;
+      }
+
+      await this.deliveryRepo.createDeliveriesInTransaction(
+        tx,
+        eventId,
+        endpointIds,
+        this.maxAttempts,
+      );
+
+      this.logger.log(
+        `Event ${eventType} (${eventId}) → ${endpointIds.length} targeted endpoint(s)`,
+      );
+
+      return eventId;
+    });
+  }
+
   private async sendInternal(
     event: WebhookEvent,
     tenantId: string | undefined,

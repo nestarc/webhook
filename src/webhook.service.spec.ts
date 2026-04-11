@@ -198,4 +198,59 @@ describe('WebhookService', () => {
       );
     });
   });
+
+  describe('sendToEndpoints', () => {
+    it('should create deliveries only for specified endpoint IDs', async () => {
+      const eventId = 'evt-targeted';
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce(eventId);
+      deliveryRepo.createDeliveriesInTransaction.mockResolvedValueOnce(undefined);
+
+      const result = await service.sendToEndpoints(
+        ['ep-a', 'ep-b'],
+        new TestEvent('t5'),
+        'tenant-1',
+      );
+
+      expect(result).toBe(eventId);
+      expect(eventRepo.saveEventInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 't5' },
+        'tenant-1',
+      );
+      // Should NOT call findMatchingEndpointsInTransaction
+      expect(endpointRepo.findMatchingEndpointsInTransaction).not.toHaveBeenCalled();
+      expect(deliveryRepo.createDeliveriesInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        eventId,
+        ['ep-a', 'ep-b'],
+        5,
+      );
+    });
+
+    it('should save event without deliveries when endpointIds is empty', async () => {
+      const eventId = 'evt-empty';
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce(eventId);
+
+      const result = await service.sendToEndpoints([], new TestEvent('t6'));
+
+      expect(result).toBe(eventId);
+      expect(deliveryRepo.createDeliveriesInTransaction).not.toHaveBeenCalled();
+    });
+
+    it('should work without tenantId', async () => {
+      const eventId = 'evt-no-tenant';
+      eventRepo.saveEventInTransaction.mockResolvedValueOnce(eventId);
+      deliveryRepo.createDeliveriesInTransaction.mockResolvedValueOnce(undefined);
+
+      await service.sendToEndpoints(['ep-x'], new TestEvent('t7'));
+
+      expect(eventRepo.saveEventInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 't7' },
+        null,
+      );
+    });
+  });
 });
