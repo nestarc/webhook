@@ -186,8 +186,8 @@ export class WebhookController {
 | `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
-| `onDeliveryFailed` | — | Callback when a delivery exhausts all retries |
-| `onEndpointDisabled` | — | Callback when the circuit breaker disables an endpoint |
+| `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts all retries. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). |
+| `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires once at exact threshold crossing. |
 
 ### Custom adapters
 

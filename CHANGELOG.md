@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-04-12
+
+### Fixed
+
+- **`onEndpointDisabled` duplicate firing** — hook now fires only at exact threshold crossing (`===`) instead of on every failure above threshold (`>=`). Prevents duplicate alerts in multi-instance environments where concurrent failures exceed the threshold.
+- **`consecutiveFailures` payload** — reports the actual failure count from `incrementFailures()` instead of the static threshold value.
+- **Blocking hooks** — `onDeliveryFailed` and `onEndpointDisabled` are now truly fire-and-forget (`void Promise.resolve().catch()`). Slow callbacks no longer block delivery processing or shutdown.
+- **`tenantId` type** — changed from `string` to `string | null` in both `DeliveryFailedContext` and `EndpointDisabledContext`. Consumers can now distinguish global endpoints (`null`) from tenant-scoped endpoints.
+- **`package-lock.json` version** — synced to match `package.json`.
+
 ## [0.6.0] - 2026-04-12
 
 ### Added
@@ -126,6 +136,7 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
+[0.6.1]: https://github.com/nestarc/webhook/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/nestarc/webhook/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nestarc/webhook/compare/v0.4.1...v0.5.0
 [0.4.0]: https://github.com/nestarc/webhook/compare/v0.3.0...v0.4.0
