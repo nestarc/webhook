@@ -29,7 +29,7 @@ export class WebhookCircuitBreaker {
   async afterDelivery(
     endpointId: string,
     success: boolean,
-    meta?: { tenantId: string; url: string },
+    meta?: { tenantId: string | null; url: string },
   ): Promise<void> {
     if (success) {
       await this.endpointRepo.resetFailures(endpointId);
@@ -43,18 +43,20 @@ export class WebhookCircuitBreaker {
         this.logger.warn(
           `Endpoint ${endpointId} disabled: consecutive_failures_exceeded (threshold=${this.failureThreshold})`,
         );
-        if (this.options.onEndpointDisabled) {
-          try {
-            await this.options.onEndpointDisabled({
+        // Fire hook only at exact threshold crossing to prevent duplicate notifications
+        // in multi-instance environments where concurrent failures exceed the threshold.
+        if (failures === this.failureThreshold && this.options.onEndpointDisabled) {
+          void Promise.resolve(
+            this.options.onEndpointDisabled({
               endpointId,
-              tenantId: meta?.tenantId ?? '',
+              tenantId: meta?.tenantId ?? null,
               url: meta?.url ?? '',
               reason: 'consecutive_failures_exceeded',
-              consecutiveFailures: this.failureThreshold,
-            });
-          } catch (hookError) {
+              consecutiveFailures: failures,
+            }),
+          ).catch((hookError) => {
             this.logger.error(`onEndpointDisabled callback error: ${hookError}`);
-          }
+          });
         }
       }
     }

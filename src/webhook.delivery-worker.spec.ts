@@ -283,7 +283,9 @@ describe('WebhookDeliveryWorker', () => {
   });
 
   describe('onDeliveryFailed callback', () => {
-    it('should call onDeliveryFailed when delivery exhausts retries', async () => {
+    const flush = () => new Promise((r) => setImmediate(r));
+
+    it('should fire onDeliveryFailed when delivery exhausts retries', async () => {
       const onDeliveryFailed = jest.fn();
       const workerWithHook = new WebhookDeliveryWorker(
         deliveryRepo as unknown as WebhookDeliveryRepository,
@@ -299,6 +301,7 @@ describe('WebhookDeliveryWorker', () => {
       dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
 
       await workerWithHook.poll();
+      await flush();
 
       expect(onDeliveryFailed).toHaveBeenCalledWith({
         deliveryId: 'd-fail',
@@ -312,7 +315,7 @@ describe('WebhookDeliveryWorker', () => {
       });
     });
 
-    it('should call onDeliveryFailed on exception path when retries exhausted', async () => {
+    it('should fire onDeliveryFailed on exception path when retries exhausted', async () => {
       const onDeliveryFailed = jest.fn();
       const workerWithHook = new WebhookDeliveryWorker(
         deliveryRepo as unknown as WebhookDeliveryRepository,
@@ -328,6 +331,7 @@ describe('WebhookDeliveryWorker', () => {
       dispatcher.dispatch.mockRejectedValueOnce(new Error('connection reset'));
 
       await workerWithHook.poll();
+      await flush();
 
       expect(onDeliveryFailed).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -355,6 +359,7 @@ describe('WebhookDeliveryWorker', () => {
       dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
 
       await workerWithHook.poll();
+      await flush();
 
       expect(deliveryRepo.markFailed).toHaveBeenCalled();
       expect(onDeliveryFailed).toHaveBeenCalled();
@@ -376,9 +381,33 @@ describe('WebhookDeliveryWorker', () => {
       dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
 
       await workerWithHook.poll();
+      await flush();
 
       expect(onDeliveryFailed).not.toHaveBeenCalled();
       expect(deliveryRepo.markRetry).toHaveBeenCalled();
+    });
+
+    it('should pass null tenantId for global deliveries', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({ id: 'd-global', tenant_id: null, attempts: 2, max_attempts: 3 });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryFailed).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: null }),
+      );
     });
   });
 

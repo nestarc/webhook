@@ -30,7 +30,8 @@ export interface DeliveryFailedContext {
   deliveryId: string;
   endpointId: string;
   eventId: string;
-  tenantId: string;
+  /** Null when the endpoint is not scoped to a tenant. */
+  tenantId: string | null;
   attempts: number;
   maxAttempts: number;
   lastError: string | null;
@@ -39,7 +40,8 @@ export interface DeliveryFailedContext {
 
 export interface EndpointDisabledContext {
   endpointId: string;
-  tenantId: string;
+  /** Null when the endpoint is not scoped to a tenant. */
+  tenantId: string | null;
   url: string;
   reason: string;
   consecutiveFailures: number;
