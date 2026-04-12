@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-12
+
+### Added
+
+- **`onDeliveryFailed` callback** — called when a delivery exhausts all retry attempts. Receives `DeliveryFailedContext` with delivery ID, endpoint ID, event ID, tenant ID, attempts, last error, and response status. Fire-and-forget — errors are logged, not propagated.
+- **`onEndpointDisabled` callback** — called when the circuit breaker disables an endpoint. Receives `EndpointDisabledContext` with endpoint ID, tenant ID, URL, reason, and failure count. Fire-and-forget — errors are logged, not propagated.
+- **`DeliveryFailedContext` type** — context object passed to the `onDeliveryFailed` callback.
+- **`EndpointDisabledContext` type** — context object passed to the `onEndpointDisabled` callback.
+- **`tenant_id` in `PendingDelivery`** — enrichment query now includes the endpoint's `tenant_id`, enabling tenant-aware notification hooks.
+
+### Changed
+
+- `WebhookCircuitBreaker.afterDelivery()` accepts an optional `meta` parameter (`{ tenantId, url }`) to pass endpoint context without extra DB queries.
+
 ## [0.5.0] - 2026-04-12
 
 ### Added
@@ -112,6 +126,7 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
+[0.6.0]: https://github.com/nestarc/webhook/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nestarc/webhook/compare/v0.4.1...v0.5.0
 [0.4.0]: https://github.com/nestarc/webhook/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nestarc/webhook/compare/v0.2.0...v0.3.0

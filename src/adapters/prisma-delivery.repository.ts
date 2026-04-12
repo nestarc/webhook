@@ -61,6 +61,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     const rows = await this.prisma.$queryRaw<PendingDelivery[]>`
       SELECT
         d.id, d.event_id, d.endpoint_id, d.attempts, d.max_attempts,
+        e.tenant_id::text AS tenant_id,
         e.url, e.secret,
         ev.event_type, ev.payload
       FROM webhook_deliveries d

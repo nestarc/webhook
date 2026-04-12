@@ -8,6 +8,7 @@ export interface PendingDelivery {
   id: string;
   event_id: string;
   endpoint_id: string;
+  tenant_id: string | null;
   attempts: number;
   max_attempts: number;
   url: string;

@@ -19,6 +19,7 @@ Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circui
 - **SSRF defense** — DNS resolution validation at registration and dispatch time
 - **Ports/adapters architecture** — swap Prisma or fetch with custom implementations
 - **Stale delivery recovery** — lease-based reaper recovers crashed worker deliveries
+- **Notification hooks** — `onDeliveryFailed` and `onEndpointDisabled` callbacks for custom alerting
 
 ## Installation
 
@@ -185,6 +186,8 @@ export class WebhookController {
 | `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
+| `onDeliveryFailed` | — | Callback when a delivery exhausts all retries |
+| `onEndpointDisabled` | — | Callback when the circuit breaker disables an endpoint |
 
 ### Custom adapters
 

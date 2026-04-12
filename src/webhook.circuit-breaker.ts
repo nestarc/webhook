@@ -18,7 +18,7 @@ export class WebhookCircuitBreaker {
     @Inject(WEBHOOK_ENDPOINT_REPOSITORY)
     private readonly endpointRepo: WebhookEndpointRepository,
     @Inject(WEBHOOK_MODULE_OPTIONS)
-    options: WebhookModuleOptions,
+    private readonly options: WebhookModuleOptions,
   ) {
     this.failureThreshold =
       options.circuitBreaker?.failureThreshold ?? DEFAULT_CIRCUIT_BREAKER_THRESHOLD;
@@ -26,7 +26,11 @@ export class WebhookCircuitBreaker {
       options.circuitBreaker?.cooldownMinutes ?? DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MINUTES;
   }
 
-  async afterDelivery(endpointId: string, success: boolean): Promise<void> {
+  async afterDelivery(
+    endpointId: string,
+    success: boolean,
+    meta?: { tenantId: string; url: string },
+  ): Promise<void> {
     if (success) {
       await this.endpointRepo.resetFailures(endpointId);
     } else {
@@ -39,6 +43,19 @@ export class WebhookCircuitBreaker {
         this.logger.warn(
           `Endpoint ${endpointId} disabled: consecutive_failures_exceeded (threshold=${this.failureThreshold})`,
         );
+        if (this.options.onEndpointDisabled) {
+          try {
+            await this.options.onEndpointDisabled({
+              endpointId,
+              tenantId: meta?.tenantId ?? '',
+              url: meta?.url ?? '',
+              reason: 'consecutive_failures_exceeded',
+              consecutiveFailures: this.failureThreshold,
+            });
+          } catch (hookError) {
+            this.logger.error(`onEndpointDisabled callback error: ${hookError}`);
+          }
+        }
       }
     }
   }

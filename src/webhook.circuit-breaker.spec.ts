@@ -29,7 +29,7 @@ describe('WebhookCircuitBreaker', () => {
 
   describe('afterDelivery — success', () => {
     it('should reset failures on success', async () => {
-      await cb.afterDelivery('ep-1', true);
+      await cb.afterDelivery('ep-1', true, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
 
       expect(endpointRepo.resetFailures).toHaveBeenCalledTimes(1);
       expect(endpointRepo.resetFailures).toHaveBeenCalledWith('ep-1');
@@ -41,7 +41,7 @@ describe('WebhookCircuitBreaker', () => {
     it('should increment failures without disabling', async () => {
       endpointRepo.incrementFailures.mockResolvedValueOnce(2);
 
-      await cb.afterDelivery('ep-1', false);
+      await cb.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
 
       expect(endpointRepo.incrementFailures).toHaveBeenCalledTimes(1);
       expect(endpointRepo.incrementFailures).toHaveBeenCalledWith('ep-1');
@@ -53,7 +53,7 @@ describe('WebhookCircuitBreaker', () => {
     it('should disable endpoint when threshold reached', async () => {
       endpointRepo.incrementFailures.mockResolvedValueOnce(3);
 
-      await cb.afterDelivery('ep-1', false);
+      await cb.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
 
       expect(endpointRepo.disableEndpoint).toHaveBeenCalledTimes(1);
       expect(endpointRepo.disableEndpoint).toHaveBeenCalledWith(
@@ -67,7 +67,7 @@ describe('WebhookCircuitBreaker', () => {
     it('should also disable endpoint when above threshold', async () => {
       endpointRepo.incrementFailures.mockResolvedValueOnce(5);
 
-      await cb.afterDelivery('ep-1', false);
+      await cb.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
 
       expect(endpointRepo.disableEndpoint).toHaveBeenCalledTimes(1);
     });
@@ -89,6 +89,81 @@ describe('WebhookCircuitBreaker', () => {
       const count = await cb.recoverEligibleEndpoints();
 
       expect(count).toBe(0);
+    });
+  });
+
+  describe('onEndpointDisabled callback', () => {
+    it('should call onEndpointDisabled when circuit breaker disables endpoint', async () => {
+      const onEndpointDisabled = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDisabled,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+
+      expect(onEndpointDisabled).toHaveBeenCalledWith({
+        endpointId: 'ep-1',
+        tenantId: 'tenant-1',
+        url: 'https://example.com/hook',
+        reason: 'consecutive_failures_exceeded',
+        consecutiveFailures: 2,
+      });
+    });
+
+    it('should not call callback on successful delivery', async () => {
+      const onEndpointDisabled = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, cooldownMinutes: 30 },
+          onEndpointDisabled,
+        },
+      );
+
+      await cbWithHook.afterDelivery('ep-1', true, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+
+      expect(onEndpointDisabled).not.toHaveBeenCalled();
+    });
+
+    it('should not call callback when below threshold', async () => {
+      const onEndpointDisabled = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, cooldownMinutes: 30 },
+          onEndpointDisabled,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(1);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+
+      expect(onEndpointDisabled).not.toHaveBeenCalled();
+    });
+
+    it('should not propagate callback errors', async () => {
+      const onEndpointDisabled = jest.fn().mockRejectedValue(new Error('callback boom'));
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDisabled,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+
+      expect(endpointRepo.disableEndpoint).toHaveBeenCalled();
+      expect(onEndpointDisabled).toHaveBeenCalled();
     });
   });
 

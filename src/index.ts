@@ -41,6 +41,8 @@ export type {
   DeliveryOptions,
   CircuitBreakerOptions,
   PollingOptions,
+  DeliveryFailedContext,
+  EndpointDisabledContext,
 } from './interfaces/webhook-options.interface';
 
 // Record types

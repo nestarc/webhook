@@ -46,6 +46,7 @@ function makeDelivery(overrides: Partial<PendingDelivery> = {}): PendingDelivery
     id: 'd-1',
     event_id: 'evt-1',
     endpoint_id: 'ep-1',
+    tenant_id: 'tenant-1',
     attempts: 0,
     max_attempts: 3,
     url: 'https://example.com/hook',
@@ -116,7 +117,7 @@ describe('WebhookDeliveryWorker', () => {
         1,
         expect.objectContaining({ success: true }),
       );
-      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-1', true);
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-1', true, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
     });
 
     it('should schedule retry on failure with attempts remaining', async () => {
@@ -137,7 +138,7 @@ describe('WebhookDeliveryWorker', () => {
         expect.objectContaining({ success: false }),
       );
       expect(retryPolicy.nextAttemptAt).toHaveBeenCalledWith(1);
-      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-2', false);
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-2', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
     });
 
     it('should mark as FAILED when max retries exhausted', async () => {
@@ -159,7 +160,7 @@ describe('WebhookDeliveryWorker', () => {
         3,
         expect.objectContaining({ success: false }),
       );
-      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-3', false);
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-3', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
       expect(deliveryRepo.markRetry).not.toHaveBeenCalled();
     });
   });
@@ -278,6 +279,106 @@ describe('WebhookDeliveryWorker', () => {
 
       expect(dispatcher.dispatch).toHaveBeenCalledTimes(2);
       expect(deliveryRepo.markSent).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('onDeliveryFailed callback', () => {
+    it('should call onDeliveryFailed when delivery exhausts retries', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({ id: 'd-fail', endpoint_id: 'ep-fail', attempts: 2, max_attempts: 3 });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+
+      await workerWithHook.poll();
+
+      expect(onDeliveryFailed).toHaveBeenCalledWith({
+        deliveryId: 'd-fail',
+        endpointId: 'ep-fail',
+        eventId: 'evt-1',
+        tenantId: 'tenant-1',
+        attempts: 3,
+        maxAttempts: 3,
+        lastError: null,
+        responseStatus: 500,
+      });
+    });
+
+    it('should call onDeliveryFailed on exception path when retries exhausted', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({ id: 'd-exc', endpoint_id: 'ep-exc', attempts: 2, max_attempts: 3 });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(new Error('connection reset'));
+
+      await workerWithHook.poll();
+
+      expect(onDeliveryFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryId: 'd-exc',
+          attempts: 3,
+          lastError: 'connection reset',
+          responseStatus: null,
+        }),
+      );
+    });
+
+    it('should not propagate callback errors to delivery processing', async () => {
+      const onDeliveryFailed = jest.fn().mockRejectedValue(new Error('callback boom'));
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({ id: 'd-cberr', attempts: 2, max_attempts: 3 });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+
+      await workerWithHook.poll();
+
+      expect(deliveryRepo.markFailed).toHaveBeenCalled();
+      expect(onDeliveryFailed).toHaveBeenCalled();
+    });
+
+    it('should not call callback when retries remain', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({ id: 'd-retry', attempts: 0, max_attempts: 3 });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+
+      await workerWithHook.poll();
+
+      expect(onDeliveryFailed).not.toHaveBeenCalled();
+      expect(deliveryRepo.markRetry).toHaveBeenCalled();
     });
   });
 

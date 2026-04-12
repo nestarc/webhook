@@ -30,7 +30,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     private readonly retryPolicy: WebhookRetryPolicy,
     private readonly circuitBreaker: WebhookCircuitBreaker,
     @Inject(WEBHOOK_MODULE_OPTIONS)
-    options: WebhookModuleOptions,
+    private readonly options: WebhookModuleOptions,
   ) {
     this.batchSize = options.polling?.batchSize ?? DEFAULT_POLLING_BATCH_SIZE;
     this.staleSendingMinutes =
@@ -87,6 +87,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
         this.logger.warn(
           `Delivery ${delivery.id} exhausted retries (${newAttempts}/${delivery.max_attempts})`,
         );
+        await this.invokeDeliveryFailedHook(delivery, newAttempts, result.error ?? null, result.statusCode ?? null);
       } else {
         const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
         await this.deliveryRepo.markRetry(
@@ -102,6 +103,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
         await this.circuitBreaker.afterDelivery(
           delivery.endpoint_id,
           result.success,
+          { tenantId: delivery.tenant_id ?? '', url: delivery.url },
         );
       } catch (cbError) {
         this.logger.error(
@@ -123,6 +125,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           this.logger.warn(
             `Delivery ${delivery.id} exhausted retries on exception (${newAttempts}/${delivery.max_attempts})`,
           );
+          await this.invokeDeliveryFailedHook(delivery, newAttempts, errorResult.error ?? null, null);
         } else {
           const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
           await this.deliveryRepo.markRetry(delivery.id, newAttempts, nextAt, errorResult);
@@ -134,6 +137,29 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       }
     } finally {
       this.activeDeliveries--;
+    }
+  }
+
+  private async invokeDeliveryFailedHook(
+    delivery: PendingDelivery,
+    attempts: number,
+    lastError: string | null,
+    responseStatus: number | null,
+  ): Promise<void> {
+    if (!this.options.onDeliveryFailed) return;
+    try {
+      await this.options.onDeliveryFailed({
+        deliveryId: delivery.id,
+        endpointId: delivery.endpoint_id,
+        eventId: delivery.event_id,
+        tenantId: delivery.tenant_id ?? '',
+        attempts,
+        maxAttempts: delivery.max_attempts,
+        lastError,
+        responseStatus,
+      });
+    } catch (hookError) {
+      this.logger.error(`onDeliveryFailed callback error: ${hookError}`);
     }
   }
 

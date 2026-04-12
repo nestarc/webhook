@@ -26,6 +26,25 @@ export interface PollingOptions {
   staleSendingMinutes?: number;
 }
 
+export interface DeliveryFailedContext {
+  deliveryId: string;
+  endpointId: string;
+  eventId: string;
+  tenantId: string;
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  responseStatus: number | null;
+}
+
+export interface EndpointDisabledContext {
+  endpointId: string;
+  tenantId: string;
+  url: string;
+  reason: string;
+  consecutiveFailures: number;
+}
+
 export interface WebhookModuleOptions {
   /** PrismaClient instance — used by default Prisma adapters. Not needed if all custom repositories are provided. */
   prisma?: any;
@@ -41,6 +60,12 @@ export interface WebhookModuleOptions {
   httpClient?: WebhookHttpClient;
   /** Custom secret vault for encrypting/decrypting endpoint signing secrets at rest. Default: PlaintextSecretVault (no-op). */
   secretVault?: WebhookSecretVault;
+
+  /** Called when a delivery exhausts all retry attempts. Fire-and-forget — errors are logged, not propagated. */
+  onDeliveryFailed?: (context: DeliveryFailedContext) => void | Promise<void>;
+
+  /** Called when the circuit breaker disables an endpoint. Fire-and-forget — errors are logged, not propagated. */
+  onEndpointDisabled?: (context: EndpointDisabledContext) => void | Promise<void>;
 }
 
 export interface WebhookOptionsFactory {
