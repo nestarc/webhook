@@ -18,6 +18,8 @@ export interface CircuitBreakerOptions {
 }
 
 export interface PollingOptions {
+  /** Set to false to disable the polling loop. Useful for API-only processes where a separate worker handles delivery. Default: true */
+  enabled?: boolean;
   interval?: number;
   batchSize?: number;
   /** Minutes before a SENDING delivery is considered stale and reset to PENDING. Default: 5 */

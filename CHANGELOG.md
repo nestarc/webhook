@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-12
+
+### Added
+
+- **`polling.enabled` option** — set to `false` to disable the delivery polling loop. This allows running the webhook module in API-only mode, where a separate worker process handles delivery. Default: `true` (backward compatible).
+
+### How to use
+
+Run the webhook module in two separate NestJS processes sharing the same PostgreSQL database:
+
+- **API process:** `polling: { enabled: false }` — publishes events only.
+- **Worker process:** `polling: { enabled: true }` — delivers webhooks only (use `NestFactory.createApplicationContext` for HTTP-serverless operation).
+
+Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or message queue required.
+
 ## [0.4.0] - 2026-04-11
 
 ### Added
@@ -97,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
+[0.5.0]: https://github.com/nestarc/webhook/compare/v0.4.1...v0.5.0
 [0.4.0]: https://github.com/nestarc/webhook/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nestarc/webhook/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nestarc/webhook/compare/v0.1.0...v0.2.0

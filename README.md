@@ -179,6 +179,7 @@ export class WebhookController {
 | `delivery.jitter` | `true` | Add random jitter to retry delays |
 | `circuitBreaker.failureThreshold` | `5` | Consecutive failures before disabling endpoint |
 | `circuitBreaker.cooldownMinutes` | `60` | Minutes before attempting recovery |
+| `polling.enabled` | `true` | Set to `false` to disable the polling loop (API-only mode) |
 | `polling.interval` | `5000` | Delivery worker poll interval (ms) |
 | `polling.batchSize` | `50` | Max deliveries per poll cycle |
 | `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
@@ -255,6 +256,39 @@ webhook-signature: v1,<base64-hmac-sha256>
   }
 }
 ```
+
+## Worker Separation
+
+By default the delivery worker runs inside your API process. For high-throughput scenarios, separate the worker into its own process so delivery HTTP calls don't compete with API request handling.
+
+**API process** — publishes events only:
+
+```typescript
+WebhookModule.forRoot({
+  prisma,
+  polling: { enabled: false },
+});
+```
+
+**Worker process** — delivers webhooks only (no HTTP server):
+
+```typescript
+// worker.module.ts
+@Module({
+  imports: [
+    WebhookModule.forRoot({
+      prisma,
+      polling: { enabled: true, interval: 5000, batchSize: 50 },
+    }),
+  ],
+})
+export class WorkerModule {}
+
+// main.ts
+const app = await NestFactory.createApplicationContext(WorkerModule);
+```
+
+Both processes share the same PostgreSQL database. Workers scale horizontally — `FOR UPDATE SKIP LOCKED` prevents duplicate delivery.
 
 ## Architecture
 

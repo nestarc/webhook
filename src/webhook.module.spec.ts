@@ -240,6 +240,23 @@ describe('WebhookModule', () => {
       expect(() => registry.getInterval('webhook-delivery-poll')).toThrow();
     });
 
+    it('should skip polling when polling.enabled is false', async () => {
+      module = await Test.createTestingModule({
+        imports: [
+          WebhookModule.forRoot({
+            prisma: mockPrisma,
+            polling: { enabled: false },
+          }),
+        ],
+      }).compile();
+
+      const registry = module.get(SchedulerRegistry);
+      await module.init();
+
+      // Interval should NOT be registered
+      expect(() => registry.getInterval('webhook-delivery-poll')).toThrow();
+    });
+
     it('should use custom polling interval from options', async () => {
       const setIntervalSpy = jest.spyOn(global, 'setInterval');
 

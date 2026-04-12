@@ -180,6 +180,7 @@ export class WebhookModule implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
+    if (this.options.polling?.enabled === false) return;
     const interval = this.options.polling?.interval ?? DEFAULT_POLLING_INTERVAL;
     const intervalRef = setInterval(() => {
       this.deliveryWorker.poll();
