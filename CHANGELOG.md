@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-04-14
+
+### Added
+
+- **`failureKind` in `DeliveryFailedContext`** — high-level classification of the final failure: `'url_validation' | 'dispatch_error' | 'http_error'`. Consumers can branch without parsing `lastError` strings.
+- **URL validation metadata in `DeliveryFailedContext`** — when `failureKind === 'url_validation'`, the context also carries `validationReason`, `validationUrl`, and `resolvedIp` propagated from `WebhookUrlValidationError`. Previously this structured information was lost at the worker boundary.
+- **`DeliveryFailureKind` type export** — machine-readable union type re-exported from the package root.
+
+### Changed
+
+- `DeliveryFailedContext` gained four optional fields; existing consumers are unaffected. Hook signature unchanged.
+- `WebhookDeliveryWorker` now detects `WebhookUrlValidationError` in the exception path and forwards structured metadata to `onDeliveryFailed`.
+
+### Migration
+
+기존 (문자열 매칭):
+
+```ts
+onDeliveryFailed: (ctx) => {
+  if (ctx.lastError?.includes('private address')) {
+    alert.endpointMisconfigured(ctx);
+  }
+}
+```
+
+권장 (구조화 분기):
+
+```ts
+onDeliveryFailed: (ctx) => {
+  if (ctx.failureKind === 'url_validation') {
+    alert.endpointMisconfigured({
+      endpointId: ctx.endpointId,
+      reason: ctx.validationReason,
+      resolvedIp: ctx.resolvedIp,
+    });
+  } else if (ctx.failureKind === 'http_error') {
+    alert.downstreamUnhealthy(ctx);
+  }
+}
+```
+
 ## [0.7.0] - 2026-04-14
 
 ### Added

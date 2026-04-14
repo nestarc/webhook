@@ -8,11 +8,25 @@ import {
   DEFAULT_POLLING_BATCH_SIZE,
   DEFAULT_STALE_SENDING_MINUTES,
 } from './webhook.constants';
-import { WebhookModuleOptions } from './interfaces/webhook-options.interface';
+import {
+  DeliveryFailureKind,
+  WebhookModuleOptions,
+} from './interfaces/webhook-options.interface';
 import {
   PendingDelivery,
   WebhookDeliveryRepository,
 } from './ports/webhook-delivery.repository';
+import {
+  WebhookUrlValidationError,
+  WebhookUrlValidationReason,
+} from './webhook.url-validator';
+
+interface DeliveryFailureMeta {
+  failureKind?: DeliveryFailureKind;
+  validationReason?: WebhookUrlValidationReason;
+  validationUrl?: string;
+  resolvedIp?: string;
+}
 
 @Injectable()
 export class WebhookDeliveryWorker implements OnModuleDestroy {
@@ -87,7 +101,13 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
         this.logger.warn(
           `Delivery ${delivery.id} exhausted retries (${newAttempts}/${delivery.max_attempts})`,
         );
-        this.fireDeliveryFailedHook(delivery, newAttempts, result.error ?? null, result.statusCode ?? null);
+        this.fireDeliveryFailedHook(
+          delivery,
+          newAttempts,
+          result.error ?? null,
+          result.statusCode ?? null,
+          { failureKind: 'http_error' },
+        );
       } else {
         const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
         await this.deliveryRepo.markRetry(
@@ -125,7 +145,22 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           this.logger.warn(
             `Delivery ${delivery.id} exhausted retries on exception (${newAttempts}/${delivery.max_attempts})`,
           );
-          this.fireDeliveryFailedHook(delivery, newAttempts, errorResult.error ?? null, null);
+          const meta: DeliveryFailureMeta =
+            error instanceof WebhookUrlValidationError
+              ? {
+                  failureKind: 'url_validation',
+                  validationReason: error.reason,
+                  validationUrl: error.url ?? delivery.url,
+                  resolvedIp: error.resolvedIp,
+                }
+              : { failureKind: 'dispatch_error' };
+          this.fireDeliveryFailedHook(
+            delivery,
+            newAttempts,
+            errorResult.error ?? null,
+            null,
+            meta,
+          );
         } else {
           const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
           await this.deliveryRepo.markRetry(delivery.id, newAttempts, nextAt, errorResult);
@@ -145,6 +180,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     attempts: number,
     lastError: string | null,
     responseStatus: number | null,
+    meta: DeliveryFailureMeta = {},
   ): void {
     if (!this.options.onDeliveryFailed) return;
     void Promise.resolve(
@@ -157,6 +193,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
         maxAttempts: delivery.max_attempts,
         lastError,
         responseStatus,
+        ...meta,
       }),
     ).catch((hookError) => {
       this.logger.error(`onDeliveryFailed callback error: ${hookError}`);

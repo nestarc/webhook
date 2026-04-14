@@ -42,6 +42,7 @@ export type {
   CircuitBreakerOptions,
   PollingOptions,
   DeliveryFailedContext,
+  DeliveryFailureKind,
   EndpointDisabledContext,
 } from './interfaces/webhook-options.interface';
 

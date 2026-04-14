@@ -186,8 +186,27 @@ export class WebhookController {
 | `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
-| `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts all retries. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). |
+| `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts all retries. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
 | `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires once at exact threshold crossing. |
+
+**Delivery failure classification.** `DeliveryFailedContext.failureKind` categorizes why a delivery was abandoned after all retries:
+
+| `failureKind` | When | Extra fields |
+|---|---|---|
+| `url_validation` | SSRF defense rejected the URL (private, loopback, link-local, etc.) | `validationReason`, `validationUrl`, `resolvedIp` |
+| `dispatch_error` | Dispatcher threw (DNS failure, ECONNREFUSED, timeout) | — |
+| `http_error` | Endpoint responded with non-2xx status | `responseStatus` |
+
+```ts
+onDeliveryFailed: (ctx) => {
+  if (ctx.failureKind === 'url_validation') {
+    // ctx.validationReason: 'private' | 'loopback' | 'link_local' | ...
+    alerting.endpointMisconfigured(ctx.endpointId, ctx.validationReason);
+  } else if (ctx.failureKind === 'http_error') {
+    alerting.downstreamUnhealthy(ctx.endpointId, ctx.responseStatus);
+  }
+}
+```
 
 ### Custom adapters
 

@@ -7,6 +7,7 @@ import {
   WebhookDeliveryRepository,
 } from './ports/webhook-delivery.repository';
 import { DeliveryResult } from './interfaces/webhook-delivery.interface';
+import { WebhookUrlValidationError } from './webhook.url-validator';
 
 function createMockDeliveryRepo() {
   return {
@@ -312,6 +313,7 @@ describe('WebhookDeliveryWorker', () => {
         maxAttempts: 3,
         lastError: null,
         responseStatus: 500,
+        failureKind: 'http_error',
       });
     });
 
@@ -339,6 +341,90 @@ describe('WebhookDeliveryWorker', () => {
           attempts: 3,
           lastError: 'connection reset',
           responseStatus: null,
+          failureKind: 'dispatch_error',
+        }),
+      );
+    });
+
+    it('should propagate WebhookUrlValidationError metadata to onDeliveryFailed', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({
+        id: 'd-val',
+        endpoint_id: 'ep-val',
+        url: 'http://evil.nip.io/hook',
+        attempts: 2,
+        max_attempts: 3,
+      });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(
+        new WebhookUrlValidationError(
+          'Invalid webhook URL: "10.0.0.1" is a private address',
+          'private',
+          'http://evil.nip.io/hook',
+          '10.0.0.1',
+        ),
+      );
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryId: 'd-val',
+          attempts: 3,
+          lastError: expect.stringContaining('private address'),
+          responseStatus: null,
+          failureKind: 'url_validation',
+          validationReason: 'private',
+          validationUrl: 'http://evil.nip.io/hook',
+          resolvedIp: '10.0.0.1',
+        }),
+      );
+    });
+
+    it('should fall back to delivery.url when WebhookUrlValidationError.url is undefined', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({
+        id: 'd-val2',
+        url: 'https://customer.com/hook',
+        attempts: 2,
+        max_attempts: 3,
+      });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(
+        new WebhookUrlValidationError(
+          'Invalid webhook URL: "::1" is a loopback address',
+          'loopback',
+        ),
+      );
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failureKind: 'url_validation',
+          validationReason: 'loopback',
+          validationUrl: 'https://customer.com/hook',
+          resolvedIp: undefined,
         }),
       );
     });

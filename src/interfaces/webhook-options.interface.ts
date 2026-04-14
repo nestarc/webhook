@@ -4,6 +4,7 @@ import { WebhookEndpointRepository } from '../ports/webhook-endpoint.repository'
 import { WebhookDeliveryRepository } from '../ports/webhook-delivery.repository';
 import { WebhookHttpClient } from '../ports/webhook-http-client';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
+import { WebhookUrlValidationReason } from '../webhook.url-validator';
 
 export interface DeliveryOptions {
   timeout?: number;
@@ -26,6 +27,14 @@ export interface PollingOptions {
   staleSendingMinutes?: number;
 }
 
+/**
+ * Category of failure that caused the delivery to exhaust retries.
+ * - `url_validation`: SSRF defense rejected the URL (private/loopback/link-local/etc.)
+ * - `dispatch_error`: dispatcher threw an exception (timeout, ECONNREFUSED, etc.)
+ * - `http_error`: endpoint responded with a non-2xx status code
+ */
+export type DeliveryFailureKind = 'url_validation' | 'dispatch_error' | 'http_error';
+
 export interface DeliveryFailedContext {
   deliveryId: string;
   endpointId: string;
@@ -36,6 +45,15 @@ export interface DeliveryFailedContext {
   maxAttempts: number;
   lastError: string | null;
   responseStatus: number | null;
+
+  /** High-level classification. Omitted for backward compatibility when unknown. */
+  failureKind?: DeliveryFailureKind;
+  /** Set only when `failureKind === 'url_validation'` — structured reason from `WebhookUrlValidationError`. */
+  validationReason?: WebhookUrlValidationReason;
+  /** Set only when `failureKind === 'url_validation'` — URL that triggered validation failure. */
+  validationUrl?: string;
+  /** Set only when `failureKind === 'url_validation'` and DNS resolution was involved. */
+  resolvedIp?: string;
 }
 
 export interface EndpointDisabledContext {
