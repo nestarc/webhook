@@ -241,6 +241,24 @@ webhook-signature: v1,<base64-hmac-sha256>
 - HTTP redirects are disabled (`redirect: 'manual'`)
 - Use `allowPrivateUrls: true` for local development only
 
+**Structured validation errors** — validation failures throw `WebhookUrlValidationError` (subclass of `Error`) with a machine-readable `reason`:
+
+```ts
+import { WebhookUrlValidationError } from '@nestarc/webhook';
+
+try {
+  await endpointAdmin.createEndpoint({ url, events: ['*'] });
+} catch (err) {
+  if (err instanceof WebhookUrlValidationError) {
+    // err.reason: 'parse' | 'scheme' | 'blocked_hostname'
+    //           | 'loopback' | 'private' | 'link_local' | 'invalid_target'
+    // err.url, err.resolvedIp also available
+    throw new BadRequestException({ message: err.message, reason: err.reason });
+  }
+  throw err;
+}
+```
+
 ### Secret handling
 
 - Signing secrets are excluded from read queries (`listEndpoints`, `getEndpoint`)

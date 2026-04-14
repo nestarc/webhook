@@ -78,4 +78,9 @@ export {
   DEFAULT_STALE_SENDING_MINUTES,
 } from './webhook.constants';
 
-export { validateWebhookUrl, resolveAndValidateHost } from './webhook.url-validator';
+export {
+  validateWebhookUrl,
+  resolveAndValidateHost,
+  WebhookUrlValidationError,
+  type WebhookUrlValidationReason,
+} from './webhook.url-validator';

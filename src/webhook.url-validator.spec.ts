@@ -1,4 +1,8 @@
-import { validateWebhookUrl } from './webhook.url-validator';
+import {
+  validateWebhookUrl,
+  WebhookUrlValidationError,
+  type WebhookUrlValidationReason,
+} from './webhook.url-validator';
 import * as dns from 'dns';
 
 // Mock dns.promises for DNS resolution tests
@@ -17,6 +21,21 @@ beforeEach(() => {
   mockResolve4.mockResolvedValue(['203.0.113.50']);
   mockResolve6.mockRejectedValue(new Error('ENODATA'));
 });
+
+async function expectReason(
+  url: string,
+  reason: WebhookUrlValidationReason,
+): Promise<WebhookUrlValidationError> {
+  try {
+    await validateWebhookUrl(url);
+  } catch (err) {
+    expect(err).toBeInstanceOf(WebhookUrlValidationError);
+    const e = err as WebhookUrlValidationError;
+    expect(e.reason).toBe(reason);
+    return e;
+  }
+  throw new Error(`Expected validateWebhookUrl(${url}) to throw`);
+}
 
 describe('validateWebhookUrl', () => {
   describe('valid URLs', () => {
@@ -38,11 +57,19 @@ describe('validateWebhookUrl', () => {
     ])('should reject %s', async (url) => {
       await expect(validateWebhookUrl(url)).rejects.toThrow('scheme must be http or https');
     });
+
+    it('should set reason="scheme"', async () => {
+      await expectReason('ftp://example.com/hook', 'scheme');
+    });
   });
 
   describe('unparseable URL', () => {
     it('should reject garbage input', async () => {
       await expect(validateWebhookUrl('not-a-url')).rejects.toThrow('unable to parse');
+    });
+
+    it('should set reason="parse"', async () => {
+      await expectReason('not-a-url', 'parse');
     });
   });
 
@@ -54,6 +81,19 @@ describe('validateWebhookUrl', () => {
       'http://[::1]/hook',
     ])('should reject %s', async (url) => {
       await expect(validateWebhookUrl(url)).rejects.toThrow();
+    });
+
+    it('should set reason="blocked_hostname" for localhost', async () => {
+      await expectReason('http://localhost/hook', 'blocked_hostname');
+    });
+
+    it('should set reason="loopback" for 127.0.0.1', async () => {
+      const e = await expectReason('http://127.0.0.1/hook', 'loopback');
+      expect(e.resolvedIp).toBe('127.0.0.1');
+    });
+
+    it('should set reason="loopback" for [::1]', async () => {
+      await expectReason('http://[::1]/hook', 'loopback');
     });
   });
 
@@ -68,6 +108,12 @@ describe('validateWebhookUrl', () => {
     ])('should reject private IP %s', async (url) => {
       await expect(validateWebhookUrl(url)).rejects.toThrow('private address');
     });
+
+    it('should set reason="private"', async () => {
+      const e = await expectReason('http://10.0.0.1/hook', 'private');
+      expect(e.resolvedIp).toBe('10.0.0.1');
+      expect(e.url).toBe('http://10.0.0.1/hook');
+    });
   });
 
   describe('link-local / cloud metadata', () => {
@@ -77,11 +123,19 @@ describe('validateWebhookUrl', () => {
     ])('should reject metadata IP %s', async (url) => {
       await expect(validateWebhookUrl(url)).rejects.toThrow();
     });
+
+    it('should set reason="link_local"', async () => {
+      await expectReason('http://169.254.169.254/', 'link_local');
+    });
   });
 
   describe('zero address', () => {
     it('should reject 0.0.0.0', async () => {
       await expect(validateWebhookUrl('http://0.0.0.0/hook')).rejects.toThrow();
+    });
+
+    it('should set reason="invalid_target"', async () => {
+      await expectReason('http://0.0.0.0/hook', 'invalid_target');
     });
   });
 
@@ -92,6 +146,14 @@ describe('validateWebhookUrl', () => {
       'http://[fe80::1]/hook',
     ])('should reject IPv6 private %s', async (url) => {
       await expect(validateWebhookUrl(url)).rejects.toThrow();
+    });
+
+    it('should set reason="private" for fc00::', async () => {
+      await expectReason('http://[fc00::1]/hook', 'private');
+    });
+
+    it('should set reason="link_local" for fe80::', async () => {
+      await expectReason('http://[fe80::1]/hook', 'link_local');
     });
   });
 
@@ -112,6 +174,10 @@ describe('validateWebhookUrl', () => {
       await expect(
         validateWebhookUrl('http://[::ffff:169.254.169.254]/hook'),
       ).rejects.toThrow();
+    });
+
+    it('should set reason="loopback" for ::ffff:127.0.0.1', async () => {
+      await expectReason('http://[::ffff:127.0.0.1]/hook', 'loopback');
     });
   });
 
@@ -150,6 +216,34 @@ describe('validateWebhookUrl', () => {
       await expect(
         validateWebhookUrl('https://customer.com/hook'),
       ).resolves.not.toThrow();
+    });
+
+    it('should set reason="private" with resolvedIp when DNS bypass detected', async () => {
+      mockResolve4.mockResolvedValueOnce(['10.0.0.1']);
+      mockResolve6.mockRejectedValueOnce(new Error('ENODATA'));
+
+      const e = await expectReason('http://evil.nip.io/hook', 'private');
+      expect(e.resolvedIp).toBe('10.0.0.1');
+      expect(e.url).toBe('http://evil.nip.io/hook');
+    });
+  });
+
+  describe('WebhookUrlValidationError class', () => {
+    it('should be an instance of Error (backward compat)', async () => {
+      try {
+        await validateWebhookUrl('not-a-url');
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        expect(err).toBeInstanceOf(WebhookUrlValidationError);
+      }
+    });
+
+    it('should expose name="WebhookUrlValidationError"', async () => {
+      try {
+        await validateWebhookUrl('ftp://example.com/hook');
+      } catch (err) {
+        expect((err as Error).name).toBe('WebhookUrlValidationError');
+      }
     });
   });
 });

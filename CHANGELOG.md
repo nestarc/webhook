@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-04-14
+
+### Added
+
+- **`WebhookUrlValidationError` class** — URL 검증 실패 시 plain `Error` 대신 전용 에러 클래스를 던진다. 소비자는 메시지 문자열 매칭 없이 `instanceof WebhookUrlValidationError` 로 분기할 수 있다.
+- **`reason` 필드 (`WebhookUrlValidationReason`)** — 검증 실패 원인을 구조화된 값으로 노출: `'parse' | 'scheme' | 'blocked_hostname' | 'loopback' | 'private' | 'link_local' | 'invalid_target'`.
+- **`url` / `resolvedIp` 필드** — 실패한 입력 URL 및 DNS 해석 결과 IP(해당되는 경우)를 에러 객체에 포함. 구조화된 400 응답(예: `{ message, reason, resolvedIp }`) 구성에 활용 가능.
+- `resolveAndValidateHost(hostname, url?)` — 선택적 `url` 파라미터 추가(하위호환). 에러 객체의 `url` 필드를 채우기 위함.
+
+### Changed
+
+- `validateWebhookUrl` / `resolveAndValidateHost` 내부 `throw new Error(...)` 전체 치환. **메시지 포맷은 그대로 유지** — 기존 `err.message.includes('private address')` 패턴의 소비자는 영향 없음.
+
+### Migration
+
+기존:
+
+```ts
+} catch (err) {
+  if (err instanceof Error && err.message.toLowerCase().includes('invalid webhook url')) {
+    throw new BadRequestException(err.message);
+  }
+  throw err;
+}
+```
+
+권장:
+
+```ts
+import { WebhookUrlValidationError } from '@nestarc/webhook';
+
+} catch (err) {
+  if (err instanceof WebhookUrlValidationError) {
+    throw new BadRequestException({ message: err.message, reason: err.reason });
+  }
+  throw err;
+}
+```
+
 ## [0.6.1] - 2026-04-12
 
 ### Fixed
