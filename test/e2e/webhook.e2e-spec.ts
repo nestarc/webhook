@@ -8,6 +8,7 @@ import { WebhookService } from '../../src/webhook.service';
 import { WebhookAdminService } from '../../src/webhook.admin.service';
 import { WebhookDeliveryWorker } from '../../src/webhook.delivery-worker';
 import { WebhookEvent } from '../../src/webhook.event';
+import { WebhookSigner } from '../../src/webhook.signer';
 
 class TestOrderEvent extends WebhookEvent {
   static readonly eventType = 'order.created';
@@ -159,6 +160,7 @@ describe('Webhook E2E', () => {
     const logs = await adminService.getDeliveryLogs(endpoint.id);
     expect(logs).toHaveLength(1);
     expect(logs[0].status).toBe('SENT');
+    expect(logs[0].destinationUrl).toBe(`http://localhost:${mockServerPort}/webhook`);
 
     // Verify camelCase shape on EndpointRecord
     expect(endpoint.tenantId).toBeNull(); // null, not undefined
@@ -178,6 +180,11 @@ describe('Webhook E2E', () => {
     expect(log).not.toHaveProperty('event_id');
     expect(log).not.toHaveProperty('endpoint_id');
     expect(log).not.toHaveProperty('max_attempts');
+
+    const attempts = await adminService.getDeliveryAttempts(log.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].attemptNumber).toBe(1);
+    expect(attempts[0].status).toBe('SENT');
   });
 
   it('should not deliver to endpoints not subscribed to the event', async () => {
@@ -331,5 +338,44 @@ describe('Webhook E2E', () => {
     expect(receivedRequests).toHaveLength(1);
     const body = JSON.parse(receivedRequests[0].body);
     expect(body.type).toBe('webhook.test');
+  });
+
+  it('should send multi-signature headers during secret rotation overlap', async () => {
+    const oldSecret = Buffer.from('old-secret-for-overlap').toString('base64');
+    const newSecret = Buffer.from('new-secret-for-overlap').toString('base64');
+    const signer = new WebhookSigner();
+
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+      secret: oldSecret,
+    });
+
+    await prisma.$executeRawUnsafe(
+      `UPDATE webhook_endpoints
+       SET secret = $1,
+           previous_secret = $2,
+           previous_secret_expires_at = NOW() + interval '24 hours'
+       WHERE id = $3::uuid`,
+      newSecret,
+      oldSecret,
+      endpoint.id,
+    );
+
+    const eventId = await webhookService.send(new TestOrderEvent('ord_overlap'));
+    await deliveryWorker.poll();
+
+    expect(receivedRequests).toHaveLength(1);
+    const req = receivedRequests[0];
+    const signatureHeader = req.headers['webhook-signature'] as string;
+    const timestamp = Number(req.headers['webhook-timestamp']);
+
+    expect(signatureHeader.split(' ')).toHaveLength(2);
+    expect(
+      signer.verify(eventId, timestamp, req.body, newSecret, signatureHeader),
+    ).toBe(true);
+    expect(
+      signer.verify(eventId, timestamp, req.body, oldSecret, signatureHeader),
+    ).toBe(true);
   });
 });

@@ -37,11 +37,11 @@ export class WebhookDispatcher {
     });
 
     const timestamp = Math.floor(Date.now() / 1000);
-    const headers = this.signer.sign(
+    const headers = this.signer.signAll(
       delivery.event_id,
       timestamp,
       body,
-      delivery.secret,
+      [delivery.secret, ...(delivery.additionalSecrets ?? [])],
     );
 
     return this.httpClient.post(delivery.url, headers, body, this.timeout);

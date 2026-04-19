@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { WEBHOOK_DELIVERY_REPOSITORY } from './webhook.constants';
 import { WebhookDeliveryRepository } from './ports/webhook-delivery.repository';
 import {
+  DeliveryAttemptRecord,
   DeliveryLogFilters,
   DeliveryRecord,
 } from './interfaces/webhook-delivery.interface';
@@ -18,6 +19,10 @@ export class WebhookDeliveryAdminService {
     filters?: DeliveryLogFilters,
   ): Promise<DeliveryRecord[]> {
     return this.deliveryRepo.getDeliveryLogs(endpointId, filters);
+  }
+
+  async getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]> {
+    return this.deliveryRepo.getDeliveryAttempts(deliveryId);
   }
 
   async retryDelivery(deliveryId: string): Promise<boolean> {

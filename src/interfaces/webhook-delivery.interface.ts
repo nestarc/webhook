@@ -4,6 +4,7 @@ export interface DeliveryRecord {
   id: string;
   eventId: string;
   endpointId: string;
+  destinationUrl?: string | null;
   status: DeliveryStatus;
   attempts: number;
   maxAttempts: number;
@@ -14,6 +15,19 @@ export interface DeliveryRecord {
   responseBody: string | null;
   latencyMs: number | null;
   lastError: string | null;
+}
+
+export interface DeliveryAttemptRecord {
+  id: string;
+  deliveryId: string;
+  attemptNumber: number;
+  status: DeliveryStatus | 'PENDING';
+  responseStatus: number | null;
+  responseBody: string | null;
+  responseBodyTruncated: boolean;
+  latencyMs: number | null;
+  lastError: string | null;
+  createdAt: Date;
 }
 
 export interface EventRecord {

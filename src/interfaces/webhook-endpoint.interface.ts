@@ -9,6 +9,7 @@ export interface EndpointRecord {
   consecutiveFailures: number;
   disabledAt: Date | null;
   disabledReason: string | null;
+  previousSecretExpiresAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

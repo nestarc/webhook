@@ -1,4 +1,5 @@
 import {
+  DeliveryAttemptRecord,
   DeliveryLogFilters,
   DeliveryRecord,
   DeliveryResult,
@@ -13,6 +14,7 @@ export interface PendingDelivery {
   max_attempts: number;
   url: string;
   secret: string;
+  additionalSecrets?: string[];
   event_type: string;
   payload: Record<string, unknown>;
 }
@@ -36,6 +38,7 @@ export interface WebhookDeliveryRepository {
 
   recoverStaleSending(stalenessMinutes: number): Promise<number>;
   getDeliveryLogs(endpointId: string, filters?: DeliveryLogFilters): Promise<DeliveryRecord[]>;
+  getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]>;
   retryDelivery(deliveryId: string): Promise<boolean>;
   createTestDelivery(eventId: string, endpointId: string): Promise<void>;
 }

@@ -9,6 +9,7 @@ function makeDelivery(overrides: Partial<PendingDelivery> = {}): PendingDelivery
     attempts: 0, max_attempts: 3,
     url: 'https://example.com/hook',
     secret: Buffer.from('a'.repeat(32)).toString('base64'),
+    additionalSecrets: [],
     event_type: 'order.created',
     payload: { orderId: 'ord-1' },
     ...overrides,
@@ -46,5 +47,22 @@ describe('WebhookDispatcher', () => {
     const defaultDispatcher = new WebhookDispatcher(signer, httpClient, {});
     // Access private field to verify default
     expect((defaultDispatcher as any).timeout).toBe(10_000);
+  });
+
+  it('should include multiple signatures when additional secrets are provided', async () => {
+    httpClient.post.mockResolvedValueOnce({
+      success: true,
+      statusCode: 200,
+      body: 'OK',
+      latencyMs: 50,
+    });
+
+    const delivery = makeDelivery({
+      additionalSecrets: [Buffer.from('b'.repeat(32)).toString('base64')],
+    });
+    await dispatcher.dispatch(delivery);
+
+    const [, headers] = httpClient.post.mock.calls[0];
+    expect(headers['webhook-signature'].split(' ')).toHaveLength(2);
   });
 });

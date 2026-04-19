@@ -2,7 +2,10 @@ import { WebhookAdminService } from './webhook.admin.service';
 import { WebhookEndpointAdminService } from './webhook.endpoint-admin.service';
 import { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
 import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
-import { DeliveryRecord } from './interfaces/webhook-delivery.interface';
+import {
+  DeliveryAttemptRecord,
+  DeliveryRecord,
+} from './interfaces/webhook-delivery.interface';
 
 function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
   return {
@@ -58,8 +61,14 @@ function createMockEndpointAdmin() {
 function createMockDeliveryAdmin() {
   return {
     getDeliveryLogs: jest.fn(),
+    getDeliveryAttempts: jest.fn(),
     retryDelivery: jest.fn(),
-  } as jest.Mocked<Pick<WebhookDeliveryAdminService, 'getDeliveryLogs' | 'retryDelivery'>>;
+  } as jest.Mocked<
+    Pick<
+      WebhookDeliveryAdminService,
+      'getDeliveryLogs' | 'getDeliveryAttempts' | 'retryDelivery'
+    >
+  >;
 }
 
 describe('WebhookAdminService', () => {
@@ -229,6 +238,31 @@ describe('WebhookAdminService', () => {
       const result = await admin.retryDelivery('del-2');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('getDeliveryAttempts', () => {
+    it('should delegate to deliveryAdmin.getDeliveryAttempts', async () => {
+      const attempts: DeliveryAttemptRecord[] = [
+        {
+          id: 'attempt-1',
+          deliveryId: 'del-1',
+          attemptNumber: 1,
+          status: 'FAILED',
+          responseStatus: 500,
+          responseBody: 'boom',
+          responseBodyTruncated: false,
+          latencyMs: 120,
+          lastError: 'boom',
+          createdAt: new Date(),
+        },
+      ];
+      deliveryAdmin.getDeliveryAttempts.mockResolvedValueOnce(attempts);
+
+      const result = await admin.getDeliveryAttempts('del-1');
+
+      expect(result).toEqual(attempts);
+      expect(deliveryAdmin.getDeliveryAttempts).toHaveBeenCalledWith('del-1');
     });
   });
 

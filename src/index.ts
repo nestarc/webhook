@@ -57,6 +57,7 @@ export type {
 export type {
   DeliveryStatus,
   DeliveryRecord,
+  DeliveryAttemptRecord,
   EventRecord,
   DeliveryResult,
   DeliveryLogFilters,

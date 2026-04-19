@@ -14,6 +14,7 @@ const ENDPOINT_COLUMNS = `
   consecutive_failures AS "consecutiveFailures",
   disabled_at AS "disabledAt",
   disabled_reason AS "disabledReason",
+  previous_secret_expires_at AS "previousSecretExpiresAt",
   created_at AS "createdAt",
   updated_at AS "updatedAt"`;
 
@@ -24,6 +25,7 @@ const ENDPOINT_COLUMNS_WITH_SECRET = `
   consecutive_failures AS "consecutiveFailures",
   disabled_at AS "disabledAt",
   disabled_reason AS "disabledReason",
+  previous_secret_expires_at AS "previousSecretExpiresAt",
   created_at AS "createdAt",
   updated_at AS "updatedAt"`;
 

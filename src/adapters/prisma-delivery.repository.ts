@@ -4,17 +4,41 @@ import {
   WebhookDeliveryRepository,
 } from '../ports/webhook-delivery.repository';
 import {
+  DeliveryAttemptRecord,
   DeliveryLogFilters,
   DeliveryRecord,
   DeliveryResult,
 } from '../interfaces/webhook-delivery.interface';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
 
+const MAX_ATTEMPT_RESPONSE_BODY_LENGTH = 4096;
+
+function truncateAttemptResponseBody(body: string | null | undefined) {
+  if (body == null) {
+    return {
+      responseBody: null,
+      responseBodyTruncated: false,
+    };
+  }
+
+  if (body.length <= MAX_ATTEMPT_RESPONSE_BODY_LENGTH) {
+    return {
+      responseBody: body,
+      responseBodyTruncated: false,
+    };
+  }
+
+  return {
+    responseBody: body.slice(0, MAX_ATTEMPT_RESPONSE_BODY_LENGTH),
+    responseBodyTruncated: true,
+  };
+}
+
 @Injectable()
 export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
   constructor(
-    private readonly prisma: any,
-    private readonly vault?: WebhookSecretVault,
+    protected readonly prisma: any,
+    protected readonly vault?: WebhookSecretVault,
   ) {}
 
   async createDeliveriesInTransaction(
@@ -24,8 +48,35 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     maxAttempts: number,
   ): Promise<void> {
     await tx.$executeRawUnsafe(
-      `INSERT INTO webhook_deliveries (event_id, endpoint_id, status, attempts, max_attempts, next_attempt_at)
-       SELECT $1::uuid, unnest($2::uuid[]), 'PENDING', 0, $3, NOW()`,
+      `INSERT INTO webhook_deliveries (
+         event_id,
+         endpoint_id,
+         status,
+         attempts,
+         max_attempts,
+         next_attempt_at,
+         endpoint_url_snapshot,
+         signing_secret_snapshot,
+         secondary_signing_secret_snapshot
+       )
+       SELECT
+         $1::uuid,
+         e.id,
+         'PENDING',
+         0,
+         $3,
+         NOW(),
+         e.url,
+         e.secret,
+         CASE
+           WHEN e.previous_secret IS NOT NULL
+            AND e.previous_secret_expires_at IS NOT NULL
+            AND e.previous_secret_expires_at > NOW()
+           THEN e.previous_secret
+           ELSE NULL
+         END
+       FROM webhook_endpoints e
+       WHERE e.id = ANY($2::uuid[])`,
       eventId,
       endpointIds,
       maxAttempts,
@@ -62,7 +113,13 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       SELECT
         d.id, d.event_id, d.endpoint_id, d.attempts, d.max_attempts,
         e.tenant_id::text AS tenant_id,
-        e.url, e.secret,
+        COALESCE(d.endpoint_url_snapshot, e.url) AS url,
+        COALESCE(d.signing_secret_snapshot, e.secret) AS secret,
+        CASE
+          WHEN d.secondary_signing_secret_snapshot IS NULL
+          THEN ARRAY[]::text[]
+          ELSE ARRAY[d.secondary_signing_secret_snapshot]
+        END AS "additionalSecrets",
         ev.event_type, ev.payload
       FROM webhook_deliveries d
       JOIN webhook_endpoints e ON e.id = d.endpoint_id
@@ -72,8 +129,14 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     if (this.vault) {
       for (const row of rows) {
         row.secret = await this.vault.decrypt(row.secret);
+        row.additionalSecrets = await Promise.all(
+          (row.additionalSecrets ?? []).map((secret: string) =>
+            this.vault!.decrypt(secret),
+          ),
+        );
       }
     }
+
     return rows;
   }
 
@@ -86,6 +149,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
           response_body = ${result.body ?? null},
           latency_ms = ${result.latencyMs}
       WHERE id = ${deliveryId}::uuid`;
+    await this.appendAttemptLog(deliveryId, attempts, 'SENT', result);
   }
 
   async markFailed(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void> {
@@ -98,6 +162,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
           latency_ms = ${result.latencyMs},
           last_error = ${result.error ?? null}
       WHERE id = ${deliveryId}::uuid`;
+    await this.appendAttemptLog(deliveryId, attempts, 'FAILED', result);
   }
 
   async markRetry(
@@ -115,6 +180,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
           latency_ms = ${result.latencyMs},
           last_error = ${result.error ?? null}
       WHERE id = ${deliveryId}::uuid`;
+    await this.appendAttemptLog(deliveryId, attempts, 'PENDING', result);
   }
 
   async recoverStaleSending(stalenessMinutes: number): Promise<number> {
@@ -160,6 +226,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       SELECT d.id, d.status, d.attempts,
              d.event_id AS "eventId",
              d.endpoint_id AS "endpointId",
+             COALESCE(d.endpoint_url_snapshot, ep.url) AS "destinationUrl",
              d.max_attempts AS "maxAttempts",
              d.next_attempt_at AS "nextAttemptAt",
              d.last_attempt_at AS "lastAttemptAt",
@@ -170,6 +237,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
              d.last_error AS "lastError"
       FROM webhook_deliveries d
       JOIN webhook_events ev ON ev.id = d.event_id
+      JOIN webhook_endpoints ep ON ep.id = d.endpoint_id
       WHERE ${conditions.join(' AND ')}
       ORDER BY d.last_attempt_at DESC NULLS LAST
       LIMIT $${paramIndex++}
@@ -178,6 +246,24 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
 
     const results: DeliveryRecord[] = await this.prisma.$queryRawUnsafe(query, ...values);
     return results;
+  }
+
+  async getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]> {
+    return this.prisma.$queryRaw<DeliveryAttemptRecord[]>`
+      SELECT
+        id,
+        delivery_id AS "deliveryId",
+        attempt_number AS "attemptNumber",
+        status,
+        response_status AS "responseStatus",
+        response_body AS "responseBody",
+        response_body_truncated AS "responseBodyTruncated",
+        latency_ms AS "latencyMs",
+        last_error AS "lastError",
+        created_at AS "createdAt"
+      FROM webhook_delivery_attempts
+      WHERE delivery_id = ${deliveryId}::uuid
+      ORDER BY attempt_number ASC`;
   }
 
   async retryDelivery(deliveryId: string): Promise<boolean> {
@@ -190,7 +276,72 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
 
   async createTestDelivery(eventId: string, endpointId: string): Promise<void> {
     await this.prisma.$executeRaw`
-      INSERT INTO webhook_deliveries (event_id, endpoint_id, status, max_attempts, next_attempt_at)
-      VALUES (${eventId}::uuid, ${endpointId}::uuid, 'PENDING', 1, NOW())`;
+      INSERT INTO webhook_deliveries (
+        event_id,
+        endpoint_id,
+        status,
+        max_attempts,
+        next_attempt_at,
+        endpoint_url_snapshot,
+        signing_secret_snapshot,
+        secondary_signing_secret_snapshot
+      )
+      SELECT
+        ${eventId}::uuid,
+        e.id,
+        'PENDING',
+        1,
+        NOW(),
+        e.url,
+        e.secret,
+        CASE
+          WHEN e.previous_secret IS NOT NULL
+           AND e.previous_secret_expires_at IS NOT NULL
+           AND e.previous_secret_expires_at > NOW()
+          THEN e.previous_secret
+          ELSE NULL
+        END
+      FROM webhook_endpoints e
+      WHERE e.id = ${endpointId}::uuid`;
+  }
+
+  protected async appendAttemptLog(
+    deliveryId: string,
+    attempts: number,
+    status: 'PENDING' | 'SENT' | 'FAILED',
+    result: DeliveryResult,
+  ): Promise<void> {
+    const { responseBody, responseBodyTruncated } =
+      truncateAttemptResponseBody(result.body ?? null);
+
+    try {
+      await this.prisma.$executeRaw`
+        INSERT INTO webhook_delivery_attempts (
+          delivery_id,
+          attempt_number,
+          status,
+          response_status,
+          response_body,
+          response_body_truncated,
+          latency_ms,
+          last_error
+        )
+        VALUES (
+          ${deliveryId}::uuid,
+          ${attempts},
+          ${status},
+          ${result.statusCode ?? null},
+          ${responseBody},
+          ${responseBodyTruncated},
+          ${result.latencyMs},
+          ${result.error ?? null}
+        )`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Best-effort logging only. Delivery state has already been committed above.
+      console.error(
+        `[PrismaDeliveryRepository] Failed to append attempt log for ${deliveryId}#${attempts}: ${message}`,
+      );
+    }
   }
 }

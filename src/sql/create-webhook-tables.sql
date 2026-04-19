@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id                   UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
   url                  VARCHAR(2048) NOT NULL,
   secret               VARCHAR(255)  NOT NULL,
+  previous_secret      TEXT,
+  previous_secret_expires_at TIMESTAMPTZ,
   events               VARCHAR(255)[] NOT NULL DEFAULT '{}',
   active               BOOLEAN       NOT NULL DEFAULT TRUE,
   description          VARCHAR(500),
@@ -47,6 +49,9 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
   event_id        UUID         NOT NULL REFERENCES webhook_events(id),
   endpoint_id     UUID         NOT NULL REFERENCES webhook_endpoints(id),
+  endpoint_url_snapshot TEXT,
+  signing_secret_snapshot TEXT,
+  secondary_signing_secret_snapshot TEXT,
   status          VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                   CHECK (status IN ('PENDING', 'SENDING', 'SENT', 'FAILED')),
   attempts        INT          NOT NULL DEFAULT 0,
@@ -76,3 +81,24 @@ CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_endpoint_status
   ON webhook_deliveries (endpoint_id, status);
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_event
   ON webhook_deliveries (event_id);
+
+---
+
+CREATE TABLE IF NOT EXISTS webhook_delivery_attempts (
+  id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  delivery_id               UUID NOT NULL REFERENCES webhook_deliveries(id) ON DELETE CASCADE,
+  attempt_number            INT NOT NULL,
+  status                    VARCHAR(20) NOT NULL
+                            CHECK (status IN ('PENDING', 'SENDING', 'SENT', 'FAILED')),
+  response_status           INT,
+  response_body             TEXT,
+  response_body_truncated   BOOLEAN NOT NULL DEFAULT FALSE,
+  latency_ms                INT,
+  last_error                TEXT,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT webhook_delivery_attempts_delivery_id_attempt_number_key
+    UNIQUE (delivery_id, attempt_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_attempts_delivery_created
+  ON webhook_delivery_attempts (delivery_id, created_at);

@@ -51,6 +51,20 @@ describe('WebhookSigner', () => {
     });
   });
 
+  describe('signAll', () => {
+    it('should serialize multiple signatures as a space-delimited header', () => {
+      const primary = Buffer.from('primary-secret').toString('base64');
+      const secondary = Buffer.from('secondary-secret').toString('base64');
+
+      const headers = signer.signAll('evt_123', 1712836800, '{"test":true}', [
+        primary,
+        secondary,
+      ]);
+
+      expect(headers['webhook-signature']).toMatch(/^v1,.+\sv1,.+$/);
+    });
+  });
+
   describe('verify', () => {
     it('should verify a valid signature', () => {
       const secret = Buffer.from('test-secret').toString('base64');
@@ -94,6 +108,26 @@ describe('WebhookSigner', () => {
       );
 
       expect(isValid).toBe(false);
+    });
+
+    it('should accept any valid signature from a multi-signature header', () => {
+      const primary = Buffer.from('primary-secret').toString('base64');
+      const secondary = Buffer.from('secondary-secret').toString('base64');
+      const headers = signer.signAll('evt_1', 1000, 'body', [
+        primary,
+        secondary,
+      ]);
+
+      const secondarySignature = headers['webhook-signature'].split(' ')[1];
+      const isValid = signer.verify(
+        'evt_1',
+        1000,
+        'body',
+        secondary,
+        secondarySignature,
+      );
+
+      expect(isValid).toBe(true);
     });
   });
 

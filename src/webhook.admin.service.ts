@@ -8,6 +8,7 @@ import {
   UpdateEndpointDto,
 } from './interfaces/webhook-endpoint.interface';
 import {
+  DeliveryAttemptRecord,
   DeliveryLogFilters,
   DeliveryRecord,
 } from './interfaces/webhook-delivery.interface';
@@ -51,6 +52,10 @@ export class WebhookAdminService {
     filters?: DeliveryLogFilters,
   ): Promise<DeliveryRecord[]> {
     return this.deliveries.getDeliveryLogs(endpointId, filters);
+  }
+
+  async getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]> {
+    return this.deliveries.getDeliveryAttempts(deliveryId);
   }
 
   async retryDelivery(deliveryId: string): Promise<boolean> {
