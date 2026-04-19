@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-04-19
+
+### Added
+
+- **Per-attempt audit log (`webhook_delivery_attempts`)** — 배달 시도마다 `attempt_number`, `status`, `response_status`, `response_body`(최대 4096B 절삭), `response_body_truncated`, `latency_ms`, `last_error`, `created_at`을 행으로 기록한다. `(delivery_id, attempt_number)` 유니크 제약.
+- **`WebhookAdminService.getDeliveryAttempts(deliveryId)`** — 시도 이력을 `attempt_number ASC`로 조회. `WebhookDeliveryAdminService`, `WebhookDeliveryRepository` 포트에도 동일 메서드 노출.
+- **`DeliveryAttemptRecord` 타입 export** — 패키지 루트에서 import 가능.
+- **Endpoint snapshotting on delivery creation** — `webhook_deliveries`에 `endpoint_url_snapshot` / `signing_secret_snapshot` / `secondary_signing_secret_snapshot` 컬럼 추가. 배달 생성 시점의 URL·서명 비밀을 행에 고정 저장해, 재시도 대기 중 엔드포인트 편집이나 비밀 회전이 일어나도 이미 접수된 배달은 원래 설정대로 전송된다.
+- **Secret rotation overlap** — `webhook_endpoints.previous_secret` / `previous_secret_expires_at` 컬럼 추가. 만료 전까지 신·구 비밀을 둘 다 사용해 서명하고, 수신자는 둘 중 하나만 검증해도 통과한다.
+- **`WebhookSigner.signAll(eventId, timestamp, body, secrets[])`** — Standard Webhooks 스펙대로 공백 구분 다중 `v1,...` 서명 헤더를 생성. 기존 `sign()`은 `signAll([secret])`을 위임 호출.
+- **`DeliveryRecord.destinationUrl`** — 배달 로그 조회 시 스냅샷된 전송 대상 URL을 노출.
+
+### Changed
+
+- `WebhookSigner.verify()`는 `webhook-signature` 헤더에 포함된 다수 서명 중 **하나라도 일치하면** 통과한다(timingSafeEqual 기반). 단일 서명 요청은 기존과 동일 동작.
+- `PrismaDeliveryRepository`의 pending 조회가 `additionalSecrets` 배열을 함께 반환하고, `WebhookDispatcher`는 이를 `signAll`에 넘겨 다중 서명 헤더를 생성한다.
+
+### Migration
+
+기존 DB에는 다음 additive 스키마 변경이 필요하다:
+
+```sql
+ALTER TABLE webhook_endpoints
+  ADD COLUMN previous_secret TEXT,
+  ADD COLUMN previous_secret_expires_at TIMESTAMPTZ;
+
+ALTER TABLE webhook_deliveries
+  ADD COLUMN endpoint_url_snapshot TEXT,
+  ADD COLUMN signing_secret_snapshot TEXT,
+  ADD COLUMN secondary_signing_secret_snapshot TEXT;
+
+CREATE TABLE IF NOT EXISTS webhook_delivery_attempts (
+  id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  delivery_id               UUID NOT NULL REFERENCES webhook_deliveries(id) ON DELETE CASCADE,
+  attempt_number            INT NOT NULL,
+  status                    VARCHAR(20) NOT NULL
+                            CHECK (status IN ('PENDING', 'SENDING', 'SENT', 'FAILED')),
+  response_status           INT,
+  response_body             TEXT,
+  response_body_truncated   BOOLEAN NOT NULL DEFAULT FALSE,
+  latency_ms                INT,
+  last_error                TEXT,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT webhook_delivery_attempts_delivery_id_attempt_number_key
+    UNIQUE (delivery_id, attempt_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_attempts_delivery_created
+  ON webhook_delivery_attempts (delivery_id, created_at);
+```
+
+기존 배달 행은 스냅샷 컬럼이 `NULL`이며, 레포지토리는 `COALESCE`로 라이브 엔드포인트 값을 폴백한다. 신규 배달부터 스냅샷이 채워진다.
+
+비밀 회전 사용 예:
+
+```sql
+UPDATE webhook_endpoints
+SET secret = :new_secret,
+    previous_secret = :old_secret,
+    previous_secret_expires_at = NOW() + interval '24 hours'
+WHERE id = :endpoint_id;
+```
+
 ## [0.8.0] - 2026-04-14
 
 ### Added
