@@ -4,7 +4,8 @@ name: Release
 # pushed, or when the workflow is dispatched manually (emergency fallback).
 #
 # Flow:
-#   1. verify job reads package.json version and confirms it matches the tag.
+#   1. verify job reads package.json version and confirms it matches the tag
+#      or the manually supplied expected version.
 #   2. build-and-test runs the full prepublishOnly chain as a final safety net.
 #   3. publish runs `npm publish --provenance --access public` and creates a
 #      GitHub Release with the CHANGELOG excerpt.
@@ -21,8 +22,9 @@ name: Release
 # Security notes:
 #   - No untrusted inputs are referenced in run: commands. The only
 #     templated expressions come via explicit `env:` blocks
-#     (GIT_REF_NAME, PKG_VERSION, VERSION) so shell interpolation sees plain
-#     environment variables, never raw template substitution.
+#     (GIT_REF_NAME, EXPECTED_VERSION, PKG_VERSION, VERSION) so shell
+#     interpolation sees plain environment variables, never raw template
+#     substitution.
 #   - The `pack` step proves the tarball is publish-ready BEFORE the
 #     irreversible npm publish step.
 
@@ -32,6 +34,10 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
+      expected_version:
+        description: 'Expected package.json version to publish'
+        required: true
+        type: string
       dry_run:
         description: 'Run the full pipeline but skip the actual npm publish (default: false)'
         type: boolean
@@ -46,7 +52,7 @@ permissions:
 
 jobs:
   verify:
-    name: Verify tag matches package.json
+    name: Verify release version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.read.outputs.version }}
@@ -79,6 +85,18 @@ jobs:
             exit 1
           fi
           echo "Tag $GIT_REF_NAME matches package.json $PKG_VERSION"
+
+      - name: Ensure expected version matches package.json (manual only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          PKG_VERSION: ${{ steps.read.outputs.version }}
+        run: |
+          if [ "$EXPECTED_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Expected version $EXPECTED_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+          echo "Expected version $EXPECTED_VERSION matches package.json $PKG_VERSION"
 
   build-and-test:
     name: Full prepublishOnly chain
