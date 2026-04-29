@@ -1,5 +1,5 @@
 -- @nestarc/webhook — PostgreSQL migration
--- Creates the three core tables for outbound webhook delivery.
+-- Creates the four core tables for outbound webhook delivery.
 -- Run this migration against your PostgreSQL database before using the module.
 
 -- Required for gen_random_uuid() on PostgreSQL < 13

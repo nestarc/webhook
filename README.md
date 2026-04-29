@@ -6,14 +6,21 @@ Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circui
 
 [![CI](https://github.com/nestarc/webhook/actions/workflows/ci.yml/badge.svg)](https://github.com/nestarc/webhook/actions/workflows/ci.yml)
 
+[Changelog](./CHANGELOG.md) · [Security policy](./SECURITY.md)
+
+> **Pre-1.0:** minor version bumps may include breaking changes. Pin exact versions in production until `1.0.0`.
+
 ## Features
 
 - **Fan-out delivery** — one event to many endpoints
 - **HMAC-SHA256 signing** — Standard Webhooks compatible headers
+- **Secret rotation overlap** — sign with both old and new secrets during rotation windows
 - **Exponential backoff** — 30s, 5m, 30m, 2h, 24h (with jitter)
 - **Circuit breaker** — auto-disable failing endpoints, auto-recover after cooldown
 - **Dead letter queue** — failed deliveries tracked for manual retry
 - **Delivery logs** — full audit trail (status code, latency, response body)
+- **Per-attempt audit log** — every attempt recorded with status, latency, response body, and errors
+- **Endpoint snapshotting** — queued deliveries keep their original URL and signing secret during retries
 - **Multi-instance safe** — `FOR UPDATE SKIP LOCKED` prevents duplicate delivery
 - **Graceful shutdown** — waits for in-flight deliveries on process exit
 - **SSRF defense** — DNS resolution validation at registration and dispatch time
@@ -41,9 +48,19 @@ Run the migration SQL against your PostgreSQL database:
 psql -d your_database -f node_modules/@nestarc/webhook/src/sql/create-webhook-tables.sql
 ```
 
-This creates three tables: `webhook_endpoints`, `webhook_events`, `webhook_deliveries`.
+This creates four tables: `webhook_endpoints`, `webhook_events`, `webhook_deliveries`, and `webhook_delivery_attempts`.
 
 The migration includes `CREATE EXTENSION IF NOT EXISTS pgcrypto` for PostgreSQL < 13 compatibility.
+
+### Upgrading from versions before 0.9.0
+
+Existing databases need the v0.9.0 additive migration for per-attempt audit logs, endpoint snapshots, and secret rotation overlap:
+
+```bash
+psql -d your_database -f node_modules/@nestarc/webhook/src/sql/migrations/v0.9.0.sql
+```
+
+See [CHANGELOG.md](./CHANGELOG.md) for release-specific migration notes.
 
 ## Quick Start
 
@@ -59,7 +76,6 @@ import { WebhookModule } from '@nestarc/webhook';
       delivery: {
         timeout: 10_000,
         maxRetries: 5,
-        backoff: 'exponential',
         jitter: true,
       },
       circuitBreaker: {
@@ -126,6 +142,7 @@ export class WebhookController {
     return this.endpointAdmin.createEndpoint({
       url: 'https://customer.com/webhooks',
       events: ['order.created', 'order.paid'],
+      tenantId: 'tenant_123', // optional; omit for global endpoints
       secret: 'auto',
     });
   }
@@ -158,6 +175,7 @@ export class WebhookController {
 | Method | Description |
 |--------|-------------|
 | `getDeliveryLogs(endpointId, filters?)` | Query delivery history |
+| `getDeliveryAttempts(deliveryId)` | Query per-attempt audit records for a delivery |
 | `retryDelivery(deliveryId)` | Manually retry a failed delivery |
 
 ### WebhookSigner
@@ -165,6 +183,7 @@ export class WebhookController {
 | Method | Description |
 |--------|-------------|
 | `sign(eventId, timestamp, body, secret)` | Generate Standard Webhooks signature headers |
+| `signAll(eventId, timestamp, body, secrets[])` | Generate multi-signature headers for secret rotation overlap |
 | `verify(eventId, timestamp, body, secret, signature)` | Verify a webhook signature |
 | `generateSecret()` | Generate a random base64 signing secret |
 
@@ -188,6 +207,8 @@ export class WebhookController {
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
 | `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts all retries. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
 | `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires once at exact threshold crossing. |
+
+The retry schedule is fixed exponential (`30s`, `5m`, `30m`, `2h`, `24h`). Use `delivery.jitter` to enable or disable random jitter.
 
 **Delivery failure classification.** `DeliveryFailedContext.failureKind` categorizes why a delivery was abandoned after all retries:
 
@@ -284,6 +305,18 @@ try {
 - Secrets are only returned on `createEndpoint` (initial provisioning)
 - Delivery enrichment uses an internal path that does not expose secrets through admin APIs
 - **At-rest encryption** — provide a custom `WebhookSecretVault` to encrypt secrets before storage and decrypt before HMAC signing. The default `PlaintextSecretVault` passes values through unchanged.
+- **Rotation overlap** — set `previous_secret` and `previous_secret_expires_at` during rotation to sign queued deliveries with both the current and previous secret until the overlap expires.
+
+`WebhookSigner.verify()` accepts a request when any signature in the space-separated `webhook-signature` header matches the provided secret.
+
+### Delivery audit data
+
+Delivery logs expose the snapshotted destination URL through `DeliveryRecord.destinationUrl`. Per-attempt audit records are available through `WebhookDeliveryAdminService.getDeliveryAttempts(deliveryId)`:
+
+```ts
+const [delivery] = await deliveryAdmin.getDeliveryLogs(endpointId);
+const attempts = await deliveryAdmin.getDeliveryAttempts(delivery.id);
+```
 
 ## Webhook Payload Format
 
@@ -326,34 +359,28 @@ export class WorkerModule {}
 
 // main.ts
 const app = await NestFactory.createApplicationContext(WorkerModule);
+process.on('SIGTERM', () => void app.close());
+process.on('SIGINT', () => void app.close());
 ```
 
 Both processes share the same PostgreSQL database. Workers scale horizontally — `FOR UPDATE SKIP LOCKED` prevents duplicate delivery.
 
 ## Architecture
 
-```
-┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐
-│ Your Service │────>│  WebhookService  │────>│  PostgreSQL (tx)  │
-└─────────────┘     └──────────────────┘     └───────────────────┘
-                            │
-                    ┌───────┴────────┐
-                    │ DeliveryWorker │  (polls every N seconds)
-                    └───────┬────────┘
-                            │
-              ┌─────────────┼─────────────┐
-              v             v             v
-        ┌──────────┐ ┌──────────┐ ┌──────────┐
-        │Dispatcher│ │RetryPolicy│ │CircuitBkr│
-        └────┬─────┘ └──────────┘ └──────────┘
-             │
-        ┌────┴─────┐
-        │HttpClient│──> customer endpoints
-        └──────────┘
+```mermaid
+flowchart LR
+  A[Your Service] --> B[WebhookService]
+  B --> C[(PostgreSQL)]
+  C --> D[DeliveryWorker]
+  D --> E[Dispatcher]
+  D --> F[RetryPolicy]
+  D --> G[CircuitBreaker]
+  E --> H[HttpClient]
+  H --> I[Customer endpoints]
 ```
 
 All components depend on **port interfaces**, not concrete implementations. Default adapters use Prisma and Node.js fetch.
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).

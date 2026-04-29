@@ -15,7 +15,7 @@ import {
 
 /**
  * @deprecated Use WebhookEndpointAdminService and WebhookDeliveryAdminService directly.
- * This facade will be removed in v0.3.0.
+ * This facade remains available for 0.x compatibility and will be removed in a future release.
  */
 @Injectable()
 export class WebhookAdminService {
