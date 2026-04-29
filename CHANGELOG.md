@@ -5,26 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [0.9.0] - 2026-04-19
 
 ### Added
 
-- **Per-attempt audit log (`webhook_delivery_attempts`)** — 배달 시도마다 `attempt_number`, `status`, `response_status`, `response_body`(최대 4096B 절삭), `response_body_truncated`, `latency_ms`, `last_error`, `created_at`을 행으로 기록한다. `(delivery_id, attempt_number)` 유니크 제약.
-- **`WebhookAdminService.getDeliveryAttempts(deliveryId)`** — 시도 이력을 `attempt_number ASC`로 조회. `WebhookDeliveryAdminService`, `WebhookDeliveryRepository` 포트에도 동일 메서드 노출.
-- **`DeliveryAttemptRecord` 타입 export** — 패키지 루트에서 import 가능.
-- **Endpoint snapshotting on delivery creation** — `webhook_deliveries`에 `endpoint_url_snapshot` / `signing_secret_snapshot` / `secondary_signing_secret_snapshot` 컬럼 추가. 배달 생성 시점의 URL·서명 비밀을 행에 고정 저장해, 재시도 대기 중 엔드포인트 편집이나 비밀 회전이 일어나도 이미 접수된 배달은 원래 설정대로 전송된다.
-- **Secret rotation overlap** — `webhook_endpoints.previous_secret` / `previous_secret_expires_at` 컬럼 추가. 만료 전까지 신·구 비밀을 둘 다 사용해 서명하고, 수신자는 둘 중 하나만 검증해도 통과한다.
-- **`WebhookSigner.signAll(eventId, timestamp, body, secrets[])`** — Standard Webhooks 스펙대로 공백 구분 다중 `v1,...` 서명 헤더를 생성. 기존 `sign()`은 `signAll([secret])`을 위임 호출.
-- **`DeliveryRecord.destinationUrl`** — 배달 로그 조회 시 스냅샷된 전송 대상 URL을 노출.
+- **Per-attempt audit log (`webhook_delivery_attempts`)** — records one row per delivery attempt with `attempt_number`, `status`, `response_status`, `response_body` (truncated at 4096 bytes), `response_body_truncated`, `latency_ms`, `last_error`, and `created_at`. Enforces uniqueness on `(delivery_id, attempt_number)`.
+- **`WebhookAdminService.getDeliveryAttempts(deliveryId)`** — returns attempt history ordered by `attempt_number ASC`. The same method is exposed through `WebhookDeliveryAdminService` and the `WebhookDeliveryRepository` port.
+- **`DeliveryAttemptRecord` type export** — importable from the package root.
+- **Endpoint snapshotting on delivery creation** — adds `endpoint_url_snapshot`, `signing_secret_snapshot`, and `secondary_signing_secret_snapshot` to `webhook_deliveries`. New deliveries persist the endpoint URL and signing secrets used at enqueue time, so retries continue using the original settings even if the endpoint is edited or secrets are rotated later.
+- **Secret rotation overlap** — adds `webhook_endpoints.previous_secret` and `previous_secret_expires_at`. Until expiry, deliveries are signed with both current and previous secrets, and receivers may accept either signature.
+- **`WebhookSigner.signAll(eventId, timestamp, body, secrets[])`** — creates space-separated multi-signature `v1,...` headers according to Standard Webhooks. The existing `sign()` method delegates to `signAll([secret])`.
+- **`DeliveryRecord.destinationUrl`** — exposes the snapshotted destination URL in delivery log queries.
 
 ### Changed
 
-- `WebhookSigner.verify()`는 `webhook-signature` 헤더에 포함된 다수 서명 중 **하나라도 일치하면** 통과한다(timingSafeEqual 기반). 단일 서명 요청은 기존과 동일 동작.
-- `PrismaDeliveryRepository`의 pending 조회가 `additionalSecrets` 배열을 함께 반환하고, `WebhookDispatcher`는 이를 `signAll`에 넘겨 다중 서명 헤더를 생성한다.
+- `WebhookSigner.verify()` now accepts a `webhook-signature` header when **any one** of its signatures matches, using `timingSafeEqual`. Single-signature requests keep the previous behavior.
+- `PrismaDeliveryRepository` pending-delivery queries now return an `additionalSecrets` array, and `WebhookDispatcher` passes it to `signAll` to generate multi-signature headers.
 
 ### Migration
 
-기존 DB에는 다음 additive 스키마 변경이 필요하다:
+Existing databases need the following additive schema changes:
 
 ```sql
 ALTER TABLE webhook_endpoints
@@ -56,9 +58,9 @@ CREATE INDEX IF NOT EXISTS idx_delivery_attempts_delivery_created
   ON webhook_delivery_attempts (delivery_id, created_at);
 ```
 
-기존 배달 행은 스냅샷 컬럼이 `NULL`이며, 레포지토리는 `COALESCE`로 라이브 엔드포인트 값을 폴백한다. 신규 배달부터 스냅샷이 채워진다.
+Existing delivery rows keep `NULL` snapshot columns. Repositories fall back to live endpoint values with `COALESCE`; snapshots are populated for new deliveries only.
 
-비밀 회전 사용 예:
+Secret rotation example:
 
 ```sql
 UPDATE webhook_endpoints
@@ -83,7 +85,7 @@ WHERE id = :endpoint_id;
 
 ### Migration
 
-기존 (문자열 매칭):
+Before (string matching):
 
 ```ts
 onDeliveryFailed: (ctx) => {
@@ -93,7 +95,7 @@ onDeliveryFailed: (ctx) => {
 }
 ```
 
-권장 (구조화 분기):
+After (structured branching):
 
 ```ts
 onDeliveryFailed: (ctx) => {
@@ -113,18 +115,18 @@ onDeliveryFailed: (ctx) => {
 
 ### Added
 
-- **`WebhookUrlValidationError` class** — URL 검증 실패 시 plain `Error` 대신 전용 에러 클래스를 던진다. 소비자는 메시지 문자열 매칭 없이 `instanceof WebhookUrlValidationError` 로 분기할 수 있다.
-- **`reason` 필드 (`WebhookUrlValidationReason`)** — 검증 실패 원인을 구조화된 값으로 노출: `'parse' | 'scheme' | 'blocked_hostname' | 'loopback' | 'private' | 'link_local' | 'invalid_target'`.
-- **`url` / `resolvedIp` 필드** — 실패한 입력 URL 및 DNS 해석 결과 IP(해당되는 경우)를 에러 객체에 포함. 구조화된 400 응답(예: `{ message, reason, resolvedIp }`) 구성에 활용 가능.
-- `resolveAndValidateHost(hostname, url?)` — 선택적 `url` 파라미터 추가(하위호환). 에러 객체의 `url` 필드를 채우기 위함.
+- **`WebhookUrlValidationError` class** — URL validation failures now throw a dedicated error class instead of a plain `Error`. Consumers can branch with `instanceof WebhookUrlValidationError` instead of matching message strings.
+- **`reason` field (`WebhookUrlValidationReason`)** — exposes the validation failure cause as a structured value: `'parse' | 'scheme' | 'blocked_hostname' | 'loopback' | 'private' | 'link_local' | 'invalid_target'`.
+- **`url` / `resolvedIp` fields** — include the failed input URL and DNS-resolved IP, when applicable, on the error object. This supports structured 400 responses such as `{ message, reason, resolvedIp }`.
+- `resolveAndValidateHost(hostname, url?)` — adds a backward-compatible optional `url` parameter used to populate the error object's `url` field.
 
 ### Changed
 
-- `validateWebhookUrl` / `resolveAndValidateHost` 내부 `throw new Error(...)` 전체 치환. **메시지 포맷은 그대로 유지** — 기존 `err.message.includes('private address')` 패턴의 소비자는 영향 없음.
+- Replaced internal `throw new Error(...)` calls in `validateWebhookUrl` / `resolveAndValidateHost`. **Message formats are unchanged**, so existing consumers using patterns such as `err.message.includes('private address')` are unaffected.
 
 ### Migration
 
-기존:
+Before:
 
 ```ts
 } catch (err) {
@@ -135,7 +137,7 @@ onDeliveryFailed: (ctx) => {
 }
 ```
 
-권장:
+After:
 
 ```ts
 import { WebhookUrlValidationError } from '@nestarc/webhook';
@@ -187,6 +189,12 @@ Run the webhook module in two separate NestJS processes sharing the same Postgre
 
 Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or message queue required.
 
+## [0.4.1] - 2026-04-11
+
+### Fixed
+
+- **UUID tenant inserts** — INSERT queries now cast `tenant_id::uuid`, allowing `tenant_id` columns of UUID type (e.g. FK to `applications.id`).
+
 ## [0.4.0] - 2026-04-11
 
 ### Added
@@ -196,7 +204,6 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - **`secretVault` module option** — `WebhookModuleOptions` accepts an optional `secretVault` to replace the default plaintext vault.
 - **`status` CHECK constraint** — `webhook_deliveries.status` column now includes a CHECK constraint limiting values to `PENDING`, `SENDING`, `SENT`, `FAILED` in the official schema.
 - **`tenant_id::text` cast** — SELECT queries now cast `tenant_id::text` for comparison, enabling future UUID FK migration without breaking existing text-based tenant IDs.
-- **`tenant_id::uuid` cast** — INSERT queries now cast `tenant_id::uuid`, allowing `tenant_id` columns of UUID type (e.g. FK to `applications.id`).
 
 ### Changed
 
@@ -237,7 +244,7 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 
 ### Changed
 
-- **BREAKING:** `WebhookAdminService` is deprecated. Use `WebhookEndpointAdminService` and `WebhookDeliveryAdminService` instead. The facade will be removed in v0.3.0.
+- **BREAKING:** `WebhookAdminService` is deprecated. Use `WebhookEndpointAdminService` and `WebhookDeliveryAdminService` instead. The facade remains available for 0.x compatibility and will be removed in a future release.
 - **BREAKING:** `EndpointRecord` no longer includes `secret`. Use `EndpointRecordWithSecret` for creation responses.
 - **BREAKING:** `WebhookModuleOptions.prisma` is now optional (not needed if all custom repositories are provided).
 - `WebhookDeliveryWorker` reduced from 280 lines / 7 responsibilities to a thin orchestrator.
@@ -279,10 +286,15 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
-[0.6.1]: https://github.com/nestarc/webhook/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/nestarc/webhook/compare/v0.5.0...v0.6.0
+[Unreleased]: https://github.com/nestarc/webhook/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/nestarc/webhook/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/nestarc/webhook/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/nestarc/webhook/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/nestarc/webhook/compare/01b8e737c65e1fb39418e5b388bafa7b6459cead...v0.6.1
+[0.6.0]: https://github.com/nestarc/webhook/compare/v0.5.0...01b8e737c65e1fb39418e5b388bafa7b6459cead
 [0.5.0]: https://github.com/nestarc/webhook/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/nestarc/webhook/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nestarc/webhook/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nestarc/webhook/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/nestarc/webhook/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/nestarc/webhook/releases/tag/v0.1.0
+[0.2.0]: https://github.com/nestarc/webhook/compare/91331c91cb1463e8912ef9ed795497a2fa8e4b41...v0.2.0
+[0.1.0]: https://github.com/nestarc/webhook/commit/91331c91cb1463e8912ef9ed795497a2fa8e4b41
