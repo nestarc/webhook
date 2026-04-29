@@ -10,8 +10,17 @@ import {
   DeliveryResult,
 } from '../interfaces/webhook-delivery.interface';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
+import { ATTEMPT_RESPONSE_BODY_MAX_LENGTH } from '../webhook.constants';
 
-const MAX_ATTEMPT_RESPONSE_BODY_LENGTH = 4096;
+type AttemptLogClient = {
+  $executeRaw: <T = unknown>(
+    strings: TemplateStringsArray,
+    ...values: unknown[]
+  ) => Promise<T>;
+};
+
+const STALE_SENDING_RECOVERY_ERROR =
+  'Recovered stale SENDING delivery after worker lease expired';
 
 function truncateAttemptResponseBody(body: string | null | undefined) {
   if (body == null) {
@@ -21,7 +30,7 @@ function truncateAttemptResponseBody(body: string | null | undefined) {
     };
   }
 
-  if (body.length <= MAX_ATTEMPT_RESPONSE_BODY_LENGTH) {
+  if (body.length <= ATTEMPT_RESPONSE_BODY_MAX_LENGTH) {
     return {
       responseBody: body,
       responseBodyTruncated: false,
@@ -29,7 +38,7 @@ function truncateAttemptResponseBody(body: string | null | undefined) {
   }
 
   return {
-    responseBody: body.slice(0, MAX_ATTEMPT_RESPONSE_BODY_LENGTH),
+    responseBody: body.slice(0, ATTEMPT_RESPONSE_BODY_MAX_LENGTH),
     responseBodyTruncated: true,
   };
 }
@@ -127,42 +136,53 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       WHERE d.id = ANY(${deliveryIds}::uuid[])`;
 
     if (this.vault) {
-      for (const row of rows) {
-        row.secret = await this.vault.decrypt(row.secret);
-        row.additionalSecrets = await Promise.all(
-          (row.additionalSecrets ?? []).map((secret: string) =>
-            this.vault!.decrypt(secret),
-          ),
-        );
-      }
+      await Promise.all(
+        rows.map(async (row: PendingDelivery) => {
+          const [secret, additionalSecrets] = await Promise.all([
+            this.vault!.decrypt(row.secret),
+            Promise.all(
+              (row.additionalSecrets ?? []).map((secret: string) =>
+                this.vault!.decrypt(secret),
+              ),
+            ),
+          ]);
+
+          row.secret = secret;
+          row.additionalSecrets = additionalSecrets;
+        }),
+      );
     }
 
     return rows;
   }
 
   async markSent(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void> {
-    await this.prisma.$executeRaw`
-      UPDATE webhook_deliveries
-      SET status = 'SENT', attempts = ${attempts},
-          last_attempt_at = NOW(), completed_at = NOW(),
-          response_status = ${result.statusCode ?? null},
-          response_body = ${result.body ?? null},
-          latency_ms = ${result.latencyMs}
-      WHERE id = ${deliveryId}::uuid`;
-    await this.appendAttemptLog(deliveryId, attempts, 'SENT', result);
+    await this.prisma.$transaction(async (tx: AttemptLogClient) => {
+      await tx.$executeRaw`
+        UPDATE webhook_deliveries
+        SET status = 'SENT', attempts = ${attempts},
+            last_attempt_at = NOW(), completed_at = NOW(),
+            response_status = ${result.statusCode ?? null},
+            response_body = ${result.body ?? null},
+            latency_ms = ${result.latencyMs}
+        WHERE id = ${deliveryId}::uuid`;
+      await this.appendAttemptLog(tx, deliveryId, attempts, 'SENT', result);
+    });
   }
 
   async markFailed(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void> {
-    await this.prisma.$executeRaw`
-      UPDATE webhook_deliveries
-      SET status = 'FAILED', attempts = ${attempts},
-          last_attempt_at = NOW(), completed_at = NOW(),
-          response_status = ${result.statusCode ?? null},
-          response_body = ${result.body ?? null},
-          latency_ms = ${result.latencyMs},
-          last_error = ${result.error ?? null}
-      WHERE id = ${deliveryId}::uuid`;
-    await this.appendAttemptLog(deliveryId, attempts, 'FAILED', result);
+    await this.prisma.$transaction(async (tx: AttemptLogClient) => {
+      await tx.$executeRaw`
+        UPDATE webhook_deliveries
+        SET status = 'FAILED', attempts = ${attempts},
+            last_attempt_at = NOW(), completed_at = NOW(),
+            response_status = ${result.statusCode ?? null},
+            response_body = ${result.body ?? null},
+            latency_ms = ${result.latencyMs},
+            last_error = ${result.error ?? null}
+        WHERE id = ${deliveryId}::uuid`;
+      await this.appendAttemptLog(tx, deliveryId, attempts, 'FAILED', result);
+    });
   }
 
   async markRetry(
@@ -171,27 +191,76 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     nextAt: Date,
     result: DeliveryResult,
   ): Promise<void> {
-    await this.prisma.$executeRaw`
-      UPDATE webhook_deliveries
-      SET status = 'PENDING', attempts = ${attempts},
-          last_attempt_at = NOW(), next_attempt_at = ${nextAt},
-          response_status = ${result.statusCode ?? null},
-          response_body = ${result.body ?? null},
-          latency_ms = ${result.latencyMs},
-          last_error = ${result.error ?? null}
-      WHERE id = ${deliveryId}::uuid`;
-    await this.appendAttemptLog(deliveryId, attempts, 'PENDING', result);
+    await this.prisma.$transaction(async (tx: AttemptLogClient) => {
+      await tx.$executeRaw`
+        UPDATE webhook_deliveries
+        SET status = 'PENDING', attempts = ${attempts},
+            last_attempt_at = NOW(), next_attempt_at = ${nextAt},
+            response_status = ${result.statusCode ?? null},
+            response_body = ${result.body ?? null},
+            latency_ms = ${result.latencyMs},
+            last_error = ${result.error ?? null}
+        WHERE id = ${deliveryId}::uuid`;
+      await this.appendAttemptLog(tx, deliveryId, attempts, 'PENDING', result);
+    });
   }
 
   async recoverStaleSending(stalenessMinutes: number): Promise<number> {
     const interval = `${stalenessMinutes} minutes`;
     const recovered = await this.prisma.$queryRaw<{ id: string }[]>`
-      UPDATE webhook_deliveries
-      SET status = 'PENDING', claimed_at = NULL
-      WHERE status = 'SENDING'
-        AND claimed_at IS NOT NULL
-        AND claimed_at + ${interval}::interval < NOW()
-      RETURNING id`;
+      WITH recovered AS (
+        UPDATE webhook_deliveries
+        SET attempts = attempts + 1,
+            status = CASE
+              WHEN attempts + 1 >= max_attempts THEN 'FAILED'
+              ELSE 'PENDING'
+            END,
+            claimed_at = NULL,
+            last_attempt_at = NOW(),
+            next_attempt_at = CASE
+              WHEN attempts + 1 >= max_attempts THEN NULL
+              ELSE NOW()
+            END,
+            completed_at = CASE
+              WHEN attempts + 1 >= max_attempts THEN NOW()
+              ELSE completed_at
+            END,
+            response_status = NULL,
+            response_body = NULL,
+            latency_ms = NULL,
+            last_error = ${STALE_SENDING_RECOVERY_ERROR}
+        WHERE status = 'SENDING'
+          AND claimed_at IS NOT NULL
+          AND claimed_at + ${interval}::interval < NOW()
+        RETURNING id, attempts, status
+      ),
+      attempt_log AS (
+        INSERT INTO webhook_delivery_attempts (
+          delivery_id,
+          attempt_number,
+          status,
+          response_status,
+          response_body,
+          response_body_truncated,
+          latency_ms,
+          last_error
+        )
+        SELECT
+          id,
+          attempts,
+          status,
+          NULL,
+          NULL,
+          FALSE,
+          NULL,
+          ${STALE_SENDING_RECOVERY_ERROR}
+        FROM recovered
+        ON CONFLICT (delivery_id, attempt_number) DO NOTHING
+        RETURNING delivery_id
+      )
+      SELECT recovered.id
+      FROM recovered
+      LEFT JOIN attempt_log ON attempt_log.delivery_id = recovered.id`;
     return recovered.length;
   }
 
@@ -306,6 +375,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
   }
 
   protected async appendAttemptLog(
+    client: AttemptLogClient,
     deliveryId: string,
     attempts: number,
     status: 'PENDING' | 'SENT' | 'FAILED',
@@ -314,34 +384,26 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     const { responseBody, responseBodyTruncated } =
       truncateAttemptResponseBody(result.body ?? null);
 
-    try {
-      await this.prisma.$executeRaw`
-        INSERT INTO webhook_delivery_attempts (
-          delivery_id,
-          attempt_number,
-          status,
-          response_status,
-          response_body,
-          response_body_truncated,
-          latency_ms,
-          last_error
-        )
-        VALUES (
-          ${deliveryId}::uuid,
-          ${attempts},
-          ${status},
-          ${result.statusCode ?? null},
-          ${responseBody},
-          ${responseBodyTruncated},
-          ${result.latencyMs},
-          ${result.error ?? null}
-        )`;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // Best-effort logging only. Delivery state has already been committed above.
-      console.error(
-        `[PrismaDeliveryRepository] Failed to append attempt log for ${deliveryId}#${attempts}: ${message}`,
-      );
-    }
+    await client.$executeRaw`
+      INSERT INTO webhook_delivery_attempts (
+        delivery_id,
+        attempt_number,
+        status,
+        response_status,
+        response_body,
+        response_body_truncated,
+        latency_ms,
+        last_error
+      )
+      VALUES (
+        ${deliveryId}::uuid,
+        ${attempts},
+        ${status},
+        ${result.statusCode ?? null},
+        ${responseBody},
+        ${responseBodyTruncated},
+        ${result.latencyMs},
+        ${result.error ?? null}
+      )`;
   }
 }

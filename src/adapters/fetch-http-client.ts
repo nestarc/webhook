@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { WebhookHttpClient } from '../ports/webhook-http-client';
 import { DeliveryResult } from '../interfaces/webhook-delivery.interface';
-import { RESPONSE_BODY_MAX_LENGTH } from '../webhook.constants';
+import {
+  DEFAULT_USER_AGENT,
+  RESPONSE_BODY_MAX_LENGTH,
+} from '../webhook.constants';
 
 @Injectable()
 export class FetchHttpClient implements WebhookHttpClient {
@@ -20,7 +23,7 @@ export class FetchHttpClient implements WebhookHttpClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': '@nestarc/webhook',
+          'User-Agent': DEFAULT_USER_AGENT,
           ...headers,
         },
         body,
