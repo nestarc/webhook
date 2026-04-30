@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   ResolvedCreateEndpointInput,
+  ResolvedRotateEndpointSecretInput,
   WebhookEndpointRepository,
 } from '../ports/webhook-endpoint.repository';
 import {
@@ -167,6 +168,29 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
       RETURNING ${ENDPOINT_COLUMNS}`;
 
     const results: EndpointRecord[] = await this.prisma.$queryRawUnsafe(query, ...values);
+    return results[0] ?? null;
+  }
+
+  async rotateSecret(
+    id: string,
+    input: ResolvedRotateEndpointSecretInput,
+  ): Promise<EndpointRecord | null> {
+    const encryptedSecret = this.vault
+      ? await this.vault.encrypt(input.secret)
+      : input.secret;
+
+    const results: EndpointRecord[] = await this.prisma.$queryRawUnsafe(
+      `UPDATE webhook_endpoints
+       SET previous_secret = secret,
+           secret = $1,
+           previous_secret_expires_at = $2,
+           updated_at = NOW()
+       WHERE id = $3::uuid
+       RETURNING ${ENDPOINT_COLUMNS}`,
+      encryptedSecret,
+      input.previousSecretExpiresAt,
+      id,
+    );
     return results[0] ?? null;
   }
 

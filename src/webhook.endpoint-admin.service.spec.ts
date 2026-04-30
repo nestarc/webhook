@@ -21,6 +21,7 @@ function createMocks() {
     getEndpoint: jest.fn(),
     listEndpoints: jest.fn(),
     updateEndpoint: jest.fn(),
+    rotateSecret: jest.fn(),
     deleteEndpoint: jest.fn(),
   };
   const eventRepo = { saveEvent: jest.fn(), saveEventInTransaction: jest.fn() };
@@ -143,6 +144,71 @@ describe('WebhookEndpointAdminService', () => {
     it('deleteEndpoint', async () => {
       mocks.endpointRepo.deleteEndpoint.mockResolvedValueOnce(true);
       expect(await service.deleteEndpoint('ep-1')).toBe(true);
+    });
+  });
+
+  describe('rotateSecret', () => {
+    it('should rotate to an auto-generated secret and return it once', async () => {
+      const previousSecretExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      mocks.endpointRepo.rotateSecret.mockResolvedValueOnce(
+        makeEndpoint({ previousSecretExpiresAt }),
+      );
+
+      const result = await service.rotateSecret('ep-1', {
+        previousSecretExpiresAt,
+      });
+
+      const input = mocks.endpointRepo.rotateSecret.mock.calls[0][1];
+      expect(Buffer.from(input.secret, 'base64').length).toBe(32);
+      expect(input.previousSecretExpiresAt).toBe(previousSecretExpiresAt);
+      expect(result!.secret).toBe(input.secret);
+      expect(result!.previousSecretExpiresAt).toBe(previousSecretExpiresAt);
+    });
+
+    it('should rotate to a provided valid secret', async () => {
+      const secret = Buffer.from('new-secret-for-rotation').toString('base64');
+      const previousSecretExpiresAt = new Date(Date.now() + 60_000);
+      mocks.endpointRepo.rotateSecret.mockResolvedValueOnce(makeEndpoint());
+
+      const result = await service.rotateSecret('ep-1', {
+        secret,
+        previousSecretExpiresAt,
+      });
+
+      expect(mocks.endpointRepo.rotateSecret).toHaveBeenCalledWith('ep-1', {
+        secret,
+        previousSecretExpiresAt,
+      });
+      expect(result!.secret).toBe(secret);
+    });
+
+    it('should reject invalid rotation secrets', async () => {
+      await expect(
+        service.rotateSecret('ep-1', {
+          secret: 'not-base64',
+          previousSecretExpiresAt: new Date(Date.now() + 60_000),
+        }),
+      ).rejects.toThrow('Invalid secret');
+      expect(mocks.endpointRepo.rotateSecret).not.toHaveBeenCalled();
+    });
+
+    it('should reject non-future overlap expiries', async () => {
+      await expect(
+        service.rotateSecret('ep-1', {
+          previousSecretExpiresAt: new Date(Date.now() - 1_000),
+        }),
+      ).rejects.toThrow('future');
+      expect(mocks.endpointRepo.rotateSecret).not.toHaveBeenCalled();
+    });
+
+    it('should return null when endpoint does not exist', async () => {
+      mocks.endpointRepo.rotateSecret.mockResolvedValueOnce(null);
+
+      await expect(
+        service.rotateSecret('missing', {
+          previousSecretExpiresAt: new Date(Date.now() + 60_000),
+        }),
+      ).resolves.toBeNull();
     });
   });
 

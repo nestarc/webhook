@@ -38,3 +38,10 @@ export interface UpdateEndpointDto {
   metadata?: Record<string, unknown>;
   active?: boolean;
 }
+
+export interface RotateEndpointSecretDto {
+  /** Pass `'auto'` or omit the field to generate a secure base64 signing secret. */
+  secret?: string;
+  /** Keep the previous secret valid until this timestamp so queued receivers can overlap during rotation. */
+  previousSecretExpiresAt: Date;
+}

@@ -353,16 +353,11 @@ describe('Webhook E2E', () => {
       secret: oldSecret,
     });
 
-    await prisma.$executeRawUnsafe(
-      `UPDATE webhook_endpoints
-       SET secret = $1,
-           previous_secret = $2,
-           previous_secret_expires_at = NOW() + interval '24 hours'
-       WHERE id = $3::uuid`,
-      newSecret,
-      oldSecret,
-      endpoint.id,
-    );
+    const rotated = await adminService.rotateSecret(endpoint.id, {
+      secret: newSecret,
+      previousSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+    expect(rotated!.secret).toBe(newSecret);
 
     const eventId = await webhookService.send(new TestOrderEvent('ord_overlap'));
     await deliveryWorker.poll();

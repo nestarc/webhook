@@ -1,6 +1,7 @@
 import {
   EndpointRecord,
   EndpointRecordWithSecret,
+  RotateEndpointSecretDto,
   UpdateEndpointDto,
 } from '../interfaces/webhook-endpoint.interface';
 import { WebhookTransaction } from './webhook-delivery.repository';
@@ -13,6 +14,9 @@ export interface ResolvedCreateEndpointInput {
   metadata: Record<string, unknown> | null;
   tenantId: string | null;
 }
+
+export interface ResolvedRotateEndpointSecretInput
+  extends Required<RotateEndpointSecretDto> {}
 
 export interface WebhookEndpointRepository {
   findMatchingEndpoints(
@@ -32,6 +36,10 @@ export interface WebhookEndpointRepository {
   getEndpoint(id: string): Promise<EndpointRecord | null>;
   listEndpoints(tenantId?: string): Promise<EndpointRecord[]>;
   updateEndpoint(id: string, dto: UpdateEndpointDto): Promise<EndpointRecord | null>;
+  rotateSecret(
+    id: string,
+    input: ResolvedRotateEndpointSecretInput,
+  ): Promise<EndpointRecord | null>;
   /**
    * @returns true if a row was deleted, false if the endpoint did not exist.
    * May reject when existing delivery rows still reference the endpoint.

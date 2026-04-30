@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `WebhookEndpointAdminService.rotateSecret(endpointId, dto)` and `WebhookAdminService.rotateSecret(endpointId, dto)` now rotate endpoint signing secrets through the public admin API. The Prisma adapter moves the currently stored secret into `previous_secret`, encrypts the new secret through the configured `WebhookSecretVault`, and returns the new secret only once for receiver provisioning.
+
 ### Changed
 
 - `DEFAULT_USER_AGENT` now includes the package version (`@nestarc/webhook/<version>`) for receiver-side debugging.
@@ -259,7 +263,7 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 
 ### Changed
 
-- **BREAKING:** `WebhookAdminService` is deprecated. Use `WebhookEndpointAdminService` and `WebhookDeliveryAdminService` instead. The facade remains available for 0.x compatibility and will be removed in a future release.
+- **BREAKING:** `WebhookAdminService` is deprecated. Use `WebhookEndpointAdminService` and `WebhookDeliveryAdminService` instead. The facade remains available for 0.x compatibility and will be removed in v1.0.0.
 - **BREAKING:** `EndpointRecord` no longer includes `secret`. Use `EndpointRecordWithSecret` for creation responses.
 - **BREAKING:** `WebhookModuleOptions.prisma` is now optional (not needed if all custom repositories are provided).
 - `WebhookDeliveryWorker` reduced from 280 lines / 7 responsibilities to a thin orchestrator.

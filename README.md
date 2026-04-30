@@ -72,6 +72,8 @@ import { WebhookModule } from '@nestarc/webhook';
 @Module({
   imports: [
     WebhookModule.forRoot({
+      // prismaService is your PrismaClient/PrismaService instance.
+      // See "Async configuration" below for NestJS DI wiring.
       prisma: prismaService,
       delivery: {
         timeout: 10_000,
@@ -142,8 +144,8 @@ export class WebhookController {
     return this.endpointAdmin.createEndpoint({
       url: 'https://customer.com/webhooks',
       events: ['order.created', 'order.paid'],
-      tenantId: 'tenant_123', // optional; omit for global endpoints
-      secret: 'auto',
+      tenantId: 'tenant_123', // optional; omit for global endpoints (returned as null)
+      secret: 'auto', // case-sensitive; omit or pass "auto" to generate a secret
     });
   }
 }
@@ -166,7 +168,8 @@ export class WebhookController {
 | `createEndpoint(dto)` | Register a new webhook endpoint (returns secret) |
 | `listEndpoints(tenantId?)` | List all endpoints (secret excluded) |
 | `getEndpoint(id)` | Get endpoint details (secret excluded) |
-| `updateEndpoint(id, dto)` | Update endpoint URL, events, etc. |
+| `updateEndpoint(id, dto)` | Update endpoint URL, events, description, metadata, or active status |
+| `rotateSecret(endpointId, dto)` | Rotate the endpoint signing secret and keep the previous secret valid until `previousSecretExpiresAt` |
 | `deleteEndpoint(id)` | Delete an endpoint |
 | `sendTestEvent(endpointId)` | Send a `webhook.test` ping event |
 
@@ -187,7 +190,7 @@ export class WebhookController {
 | `verify(eventId, timestamp, body, secret, signature)` | Verify a webhook signature |
 | `generateSecret()` | Generate a random base64 signing secret |
 
-> **Deprecated:** `WebhookAdminService` is a facade that delegates to `WebhookEndpointAdminService` and `WebhookDeliveryAdminService`. It will be removed in a future release.
+> **Deprecated:** `WebhookAdminService` is a facade that delegates to `WebhookEndpointAdminService` and `WebhookDeliveryAdminService`. It has been deprecated since `v0.2.0` and will be removed in `v1.0.0`.
 
 ## Configuration
 
@@ -271,7 +274,7 @@ webhook-timestamp: <unix-seconds>
 webhook-signature: v1,<base64-hmac-sha256>
 ```
 
-**Secret format:** Secrets must be valid base64 strings decoding to at least 16 bytes. Use `"auto"` for automatic generation.
+**Secret format:** Secrets must be valid base64 strings decoding to at least 16 bytes. Use `"auto"` (case-sensitive) or omit `secret` for automatic generation.
 
 ### SSRF defense
 
@@ -305,9 +308,29 @@ try {
 - Secrets are only returned on `createEndpoint` (initial provisioning)
 - Delivery enrichment uses an internal path that does not expose secrets through admin APIs
 - **At-rest encryption** — provide a custom `WebhookSecretVault` to encrypt secrets before storage and decrypt before HMAC signing. The default `PlaintextSecretVault` passes values through unchanged.
-- **Rotation overlap** — set `previous_secret` and `previous_secret_expires_at` during rotation to sign queued deliveries with both the current and previous secret until the overlap expires.
+- **Rotation overlap** — use `rotateSecret()` to move the current stored secret to `previous_secret`, set a new current secret, and sign queued deliveries with both secrets until `previousSecretExpiresAt`.
+
+```ts
+const rotated = await endpointAdmin.rotateSecret(endpointId, {
+  previousSecretExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+});
+
+// Provision this value to the receiver immediately. It is returned only once.
+console.log(rotated?.secret);
+```
 
 `WebhookSigner.verify()` accepts a request when any signature in the space-separated `webhook-signature` header matches the provided secret.
+
+```ts
+const signer = new WebhookSigner();
+const isValid = signer.verify(
+  headers['webhook-id'],
+  Number(headers['webhook-timestamp']),
+  rawBody,
+  signingSecret,
+  headers['webhook-signature'],
+);
+```
 
 ### Delivery audit data
 
@@ -364,14 +387,15 @@ process.on('SIGINT', () => void app.close());
 ```
 
 Both processes share the same PostgreSQL database. Workers scale horizontally — `FOR UPDATE SKIP LOCKED` prevents duplicate delivery.
+During shutdown, the worker waits up to 30 seconds for the active poll cycle and in-flight deliveries. If the process exits earlier, the next worker recovers stuck `SENDING` rows after `polling.staleSendingMinutes`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A[Your Service] --> B[WebhookService]
-  B --> C[(PostgreSQL)]
-  C --> D[DeliveryWorker]
+  A[Your Service] -->|publish| B[WebhookService]
+  B -->|transactional insert| C[(PostgreSQL)]
+  D[DeliveryWorker] -->|poll and claim| C
   D --> E[Dispatcher]
   D --> F[RetryPolicy]
   D --> G[CircuitBreaker]

@@ -53,11 +53,18 @@ function createMockEndpointAdmin() {
     listEndpoints: jest.fn(),
     getEndpoint: jest.fn(),
     updateEndpoint: jest.fn(),
+    rotateSecret: jest.fn(),
     deleteEndpoint: jest.fn(),
     sendTestEvent: jest.fn(),
   } as jest.Mocked<Pick<
     WebhookEndpointAdminService,
-    'createEndpoint' | 'listEndpoints' | 'getEndpoint' | 'updateEndpoint' | 'deleteEndpoint' | 'sendTestEvent'
+    | 'createEndpoint'
+    | 'listEndpoints'
+    | 'getEndpoint'
+    | 'updateEndpoint'
+    | 'rotateSecret'
+    | 'deleteEndpoint'
+    | 'sendTestEvent'
   >>;
 }
 
@@ -196,6 +203,26 @@ describe('WebhookAdminService', () => {
       const result = await admin.deleteEndpoint('non-existent');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('rotateSecret', () => {
+    it('should delegate to endpointAdmin.rotateSecret', async () => {
+      const secret = Buffer.from('new-secret-for-rotation').toString('base64');
+      const previousSecretExpiresAt = new Date(Date.now() + 60_000);
+      const rotated = { ...makeEndpoint({ previousSecretExpiresAt }), secret };
+      endpointAdmin.rotateSecret.mockResolvedValueOnce(rotated);
+
+      const result = await admin.rotateSecret('ep-1', {
+        secret,
+        previousSecretExpiresAt,
+      });
+
+      expect(result).toBe(rotated);
+      expect(endpointAdmin.rotateSecret).toHaveBeenCalledWith('ep-1', {
+        secret,
+        previousSecretExpiresAt,
+      });
     });
   });
 

@@ -5,6 +5,7 @@ import {
   CreateEndpointDto,
   EndpointRecord,
   EndpointRecordWithSecret,
+  RotateEndpointSecretDto,
   UpdateEndpointDto,
 } from './interfaces/webhook-endpoint.interface';
 import {
@@ -41,6 +42,13 @@ export class WebhookAdminService {
     dto: UpdateEndpointDto,
   ): Promise<EndpointRecord | null> {
     return this.endpoints.updateEndpoint(endpointId, dto);
+  }
+
+  async rotateSecret(
+    endpointId: string,
+    dto: RotateEndpointSecretDto,
+  ): Promise<EndpointRecordWithSecret | null> {
+    return this.endpoints.rotateSecret(endpointId, dto);
   }
 
   async deleteEndpoint(endpointId: string): Promise<boolean> {

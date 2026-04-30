@@ -25,6 +25,7 @@ export type { WebhookEventRepository } from './ports/webhook-event.repository';
 export type {
   WebhookEndpointRepository,
   ResolvedCreateEndpointInput,
+  ResolvedRotateEndpointSecretInput,
 } from './ports/webhook-endpoint.repository';
 export type {
   WebhookDeliveryRepository,
@@ -61,6 +62,7 @@ export type {
   EndpointRecordWithSecret,
   CreateEndpointDto,
   UpdateEndpointDto,
+  RotateEndpointSecretDto,
 } from './interfaces/webhook-endpoint.interface';
 
 export type {

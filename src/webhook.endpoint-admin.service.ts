@@ -14,6 +14,7 @@ import {
   CreateEndpointDto,
   EndpointRecord,
   EndpointRecordWithSecret,
+  RotateEndpointSecretDto,
   UpdateEndpointDto,
 } from './interfaces/webhook-endpoint.interface';
 import { validateWebhookUrl } from './webhook.url-validator';
@@ -42,13 +43,7 @@ export class WebhookEndpointAdminService {
       await validateWebhookUrl(dto.url);
     }
 
-    let secret: string;
-    if (!dto.secret || dto.secret === 'auto') {
-      secret = this.signer.generateSecret();
-    } else {
-      this.validateBase64Secret(dto.secret);
-      secret = dto.secret;
-    }
+    const secret = this.resolveSecret(dto.secret);
 
     const endpoint = await this.endpointRepo.createEndpoint({
       url: dto.url,
@@ -79,6 +74,23 @@ export class WebhookEndpointAdminService {
       await validateWebhookUrl(dto.url);
     }
     return this.endpointRepo.updateEndpoint(endpointId, dto);
+  }
+
+  async rotateSecret(
+    endpointId: string,
+    dto: RotateEndpointSecretDto,
+  ): Promise<EndpointRecordWithSecret | null> {
+    this.validateRotationExpiry(dto.previousSecretExpiresAt);
+    const secret = this.resolveSecret(dto.secret);
+
+    const endpoint = await this.endpointRepo.rotateSecret(endpointId, {
+      secret,
+      previousSecretExpiresAt: dto.previousSecretExpiresAt,
+    });
+    if (!endpoint) return null;
+
+    this.logger.log(`Endpoint secret rotated: ${endpointId}`);
+    return { ...endpoint, secret };
   }
 
   async deleteEndpoint(endpointId: string): Promise<boolean> {
@@ -113,6 +125,26 @@ export class WebhookEndpointAdminService {
       throw new Error(
         'Invalid secret: decoded value must be at least 16 bytes. ' +
           'Use "auto" to generate a secure secret.',
+      );
+    }
+  }
+
+  private resolveSecret(secret: string | undefined): string {
+    if (!secret || secret === 'auto') {
+      return this.signer.generateSecret();
+    }
+
+    this.validateBase64Secret(secret);
+    return secret;
+  }
+
+  private validateRotationExpiry(expiresAt: Date): void {
+    if (!(expiresAt instanceof Date) || Number.isNaN(expiresAt.getTime())) {
+      throw new Error('Invalid rotation expiry: previousSecretExpiresAt must be a Date.');
+    }
+    if (expiresAt.getTime() <= Date.now()) {
+      throw new Error(
+        'Invalid rotation expiry: previousSecretExpiresAt must be in the future.',
       );
     }
   }

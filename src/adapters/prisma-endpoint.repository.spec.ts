@@ -68,4 +68,49 @@ describe('PrismaEndpointRepository', () => {
       expect(values).toContain(ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED);
     });
   });
+
+  describe('rotateSecret', () => {
+    it('moves the stored current secret to previous_secret and encrypts the new secret', async () => {
+      const previousSecretExpiresAt = new Date(Date.now() + 60_000);
+      const prisma = {
+        $queryRawUnsafe: jest.fn().mockResolvedValue([
+          {
+            id: 'endpoint-1',
+            url: 'https://example.com/hook',
+            events: ['*'],
+            active: true,
+            description: null,
+            metadata: null,
+            tenantId: null,
+            consecutiveFailures: 0,
+            disabledAt: null,
+            disabledReason: null,
+            previousSecretExpiresAt,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ]),
+      };
+      const vault = {
+        encrypt: jest.fn().mockResolvedValue('encrypted-new-secret'),
+        decrypt: jest.fn(),
+      };
+      const repo = new PrismaEndpointRepository(prisma, vault);
+
+      const result = await repo.rotateSecret('endpoint-1', {
+        secret: 'plain-new-secret',
+        previousSecretExpiresAt,
+      });
+
+      const [query, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+      expect(query.replace(/\s+/g, ' ')).toContain('previous_secret = secret');
+      expect(values).toEqual([
+        'encrypted-new-secret',
+        previousSecretExpiresAt,
+        'endpoint-1',
+      ]);
+      expect(vault.encrypt).toHaveBeenCalledWith('plain-new-secret');
+      expect(result!.previousSecretExpiresAt).toBe(previousSecretExpiresAt);
+    });
+  });
 });
