@@ -10,6 +10,7 @@ function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
     id: 'ep-1', url: 'https://example.com/hook',
     events: ['order.created'], active: true, description: null, metadata: null,
     tenantId: null, consecutiveFailures: 0, disabledAt: null, disabledReason: null,
+    previousSecretExpiresAt: null,
     createdAt: new Date(), updatedAt: new Date(), ...overrides,
   };
 }

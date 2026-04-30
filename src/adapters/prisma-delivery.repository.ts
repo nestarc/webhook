@@ -296,6 +296,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
              d.event_id AS "eventId",
              d.endpoint_id AS "endpointId",
              COALESCE(d.endpoint_url_snapshot, ep.url) AS "destinationUrl",
+             ep.tenant_id::text AS "tenantId",
              d.max_attempts AS "maxAttempts",
              d.next_attempt_at AS "nextAttemptAt",
              d.last_attempt_at AS "lastAttemptAt",

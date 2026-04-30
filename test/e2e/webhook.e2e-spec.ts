@@ -161,10 +161,12 @@ describe('Webhook E2E', () => {
     expect(logs).toHaveLength(1);
     expect(logs[0].status).toBe('SENT');
     expect(logs[0].destinationUrl).toBe(`http://localhost:${mockServerPort}/webhook`);
+    expect(logs[0].tenantId).toBeNull();
 
     // Verify camelCase shape on EndpointRecord
     expect(endpoint.tenantId).toBeNull(); // null, not undefined
     expect(endpoint.consecutiveFailures).toBe(0);
+    expect(endpoint.previousSecretExpiresAt).toBeNull();
     expect(endpoint.createdAt).toBeInstanceOf(Date);
     expect(endpoint.updatedAt).toBeInstanceOf(Date);
     expect(endpoint).not.toHaveProperty('tenant_id');

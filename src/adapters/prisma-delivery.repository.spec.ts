@@ -74,6 +74,21 @@ describe('PrismaDeliveryRepository', () => {
     });
   });
 
+  describe('getDeliveryLogs', () => {
+    it('selects tenant ID and destination URL for public delivery records', async () => {
+      const prisma = {
+        $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+      };
+      const repo = new PrismaDeliveryRepository(prisma);
+
+      await repo.getDeliveryLogs('endpoint-1');
+
+      const query = prisma.$queryRawUnsafe.mock.calls[0][0] as string;
+      expect(query).toContain('ep.tenant_id::text AS "tenantId"');
+      expect(query).toContain('AS "destinationUrl"');
+    });
+  });
+
   describe('enrichDeliveries', () => {
     it('starts vault decryptions for the full batch without waiting on earlier rows', async () => {
       const rows = [

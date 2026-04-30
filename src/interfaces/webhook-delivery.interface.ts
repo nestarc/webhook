@@ -1,10 +1,14 @@
 export type DeliveryStatus = 'PENDING' | 'SENDING' | 'SENT' | 'FAILED';
+export type DeliveryAttemptStatus = Exclude<DeliveryStatus, 'SENDING'>;
 
 export interface DeliveryRecord {
   id: string;
   eventId: string;
   endpointId: string;
-  destinationUrl?: string | null;
+  /** Destination URL used for this delivery. Uses the queued snapshot when available. */
+  destinationUrl: string;
+  /** Null when the endpoint is global rather than tenant-scoped. */
+  tenantId: string | null;
   status: DeliveryStatus;
   attempts: number;
   maxAttempts: number;
@@ -21,7 +25,7 @@ export interface DeliveryAttemptRecord {
   id: string;
   deliveryId: string;
   attemptNumber: number;
-  status: DeliveryStatus | 'PENDING';
+  status: DeliveryAttemptStatus;
   responseStatus: number | null;
   responseBody: string | null;
   responseBodyTruncated: boolean;

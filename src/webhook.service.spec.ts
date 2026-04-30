@@ -44,6 +44,7 @@ function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
     consecutiveFailures: 0,
     disabledAt: null,
     disabledReason: null,
+    previousSecretExpiresAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
