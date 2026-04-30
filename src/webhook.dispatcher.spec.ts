@@ -1,7 +1,9 @@
+import * as dns from 'dns';
 import { WebhookDispatcher } from './webhook.dispatcher';
 import { WebhookSigner } from './webhook.signer';
 import { WebhookHttpClient } from './ports/webhook-http-client';
 import { PendingDelivery } from './ports/webhook-delivery.repository';
+import { WebhookUrlValidationError } from './webhook.url-validator';
 
 function makeDelivery(overrides: Partial<PendingDelivery> = {}): PendingDelivery {
   return {
@@ -25,6 +27,10 @@ describe('WebhookDispatcher', () => {
     signer = new WebhookSigner();
     httpClient = { post: jest.fn() } as jest.Mocked<WebhookHttpClient>;
     dispatcher = new WebhookDispatcher(signer, httpClient, { delivery: { timeout: 5000 } });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it('should call httpClient.post with signed headers', async () => {
@@ -64,5 +70,39 @@ describe('WebhookDispatcher', () => {
 
     const [, headers] = httpClient.post.mock.calls[0];
     expect(headers['webhook-signature'].split(' ')).toHaveLength(2);
+  });
+
+  it('should report malformed delivery URLs as URL validation errors even when private URLs are allowed', async () => {
+    const permissiveDispatcher = new WebhookDispatcher(
+      signer,
+      httpClient,
+      { allowPrivateUrls: true },
+    );
+
+    await expect(
+      permissiveDispatcher.dispatch(makeDelivery({ url: 'not a url' })),
+    ).rejects.toMatchObject({
+      reason: 'parse',
+      url: 'not a url',
+    });
+    await expect(
+      permissiveDispatcher.dispatch(makeDelivery({ url: 'not a url' })),
+    ).rejects.toBeInstanceOf(WebhookUrlValidationError);
+    expect(httpClient.post).not.toHaveBeenCalled();
+  });
+
+  it('should include the delivery URL on dispatch-time DNS validation errors', async () => {
+    jest.spyOn(dns.promises, 'resolve4').mockResolvedValueOnce(['10.0.0.1']);
+    jest.spyOn(dns.promises, 'resolve6').mockResolvedValueOnce([]);
+
+    const url = 'http://customer.example/hook';
+    await expect(
+      dispatcher.dispatch(makeDelivery({ url })),
+    ).rejects.toMatchObject({
+      reason: 'private',
+      url,
+      resolvedIp: '10.0.0.1',
+    });
+    expect(httpClient.post).not.toHaveBeenCalled();
   });
 });
