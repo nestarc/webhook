@@ -5,8 +5,14 @@ import {
   DeliveryResult,
 } from '../interfaces/webhook-delivery.interface';
 
-export type WebhookTransaction = unknown;
+declare const webhookTransactionBrand: unique symbol;
 
+/** Opaque transaction token created by repository adapters. */
+export type WebhookTransaction = {
+  readonly [webhookTransactionBrand]: 'WebhookTransaction';
+};
+
+/** A delivery row claimed by the worker but not yet enriched with endpoint/event data. */
 export interface ClaimedDelivery {
   id: string;
   eventId: string;
@@ -15,6 +21,7 @@ export interface ClaimedDelivery {
   maxAttempts: number;
 }
 
+/** A claimed delivery enriched with endpoint URL, signing secrets, and event payload. Ready to dispatch. */
 export interface PendingDelivery extends ClaimedDelivery {
   tenantId: string | null;
   url: string;

@@ -6,13 +6,13 @@ export const WEBHOOK_DELIVERY_REPOSITORY = 'WEBHOOK_DELIVERY_REPOSITORY';
 export const WEBHOOK_HTTP_CLIENT = 'WEBHOOK_HTTP_CLIENT';
 
 /** Svix/Stripe-style exponential backoff schedule (seconds) */
-export const DEFAULT_BACKOFF_SCHEDULE = [
+export const DEFAULT_BACKOFF_SCHEDULE = Object.freeze([
   30,     // 30 seconds
   300,    // 5 minutes
   1800,   // 30 minutes
   7200,   // 2 hours
   86400,  // 24 hours
-];
+] as const);
 
 export const DEFAULT_DELIVERY_TIMEOUT = 10_000;
 export const DEFAULT_MAX_RETRIES = 5;

@@ -10,7 +10,9 @@ import type {
 import type {
   ClaimedDelivery,
   PendingDelivery,
+  WebhookTransaction,
 } from '../ports/webhook-delivery.repository';
+import { DEFAULT_BACKOFF_SCHEDULE } from '../webhook.constants';
 
 describe('public interface contracts', () => {
   it('keeps runtime-only shapes reflected in exported types', () => {
@@ -72,6 +74,14 @@ describe('public interface contracts', () => {
     // @ts-expect-error Nest inject tokens cannot be arbitrary numbers.
     const asyncOptions: WebhookModuleAsyncOptions = { inject: [123] };
 
+    // @ts-expect-error WebhookTransaction is an opaque token created by repository adapters.
+    const arbitraryTransaction: WebhookTransaction = {};
+
+    if (false) {
+      // @ts-expect-error Default backoff schedule is public read-only configuration data.
+      DEFAULT_BACKOFF_SCHEDULE.push(1);
+    }
+
     const claimedDelivery: ClaimedDelivery = {
       id: 'del-1',
       eventId: 'evt-1',
@@ -109,8 +119,10 @@ describe('public interface contracts', () => {
       deliveryWithoutTenantId,
       endpointWithoutRotationExpiry,
       asyncOptions,
+      arbitraryTransaction,
       pendingDelivery,
       pendingWithoutAdditionalSecrets,
     }).toBeDefined();
+    expect(Object.isFrozen(DEFAULT_BACKOFF_SCHEDULE)).toBe(true);
   });
 });

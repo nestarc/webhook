@@ -3,17 +3,21 @@ export { WebhookModule } from './webhook.module';
 
 // Core services
 export { WebhookService } from './webhook.service';
+/** @internal Wired automatically by WebhookModule. Exported for advanced testing/custom integration only. */
 export { WebhookDeliveryWorker } from './webhook.delivery-worker';
+/** @internal Wired automatically by WebhookModule. Exported for advanced testing/custom integration only. */
 export { WebhookDispatcher } from './webhook.dispatcher';
+/** @internal Wired automatically by WebhookModule. Exported for advanced testing/custom integration only. */
 export { WebhookRetryPolicy } from './webhook.retry-policy';
 export { WebhookSigner, type SignatureHeaders } from './webhook.signer';
+/** @internal Wired automatically by WebhookModule. Exported for advanced testing/custom integration only. */
 export { WebhookCircuitBreaker } from './webhook.circuit-breaker';
 export { WebhookEvent } from './webhook.event';
 
 // Admin services
 export { WebhookEndpointAdminService } from './webhook.endpoint-admin.service';
 export { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
-/** @deprecated Use WebhookEndpointAdminService and WebhookDeliveryAdminService */
+/** @deprecated since v0.2.0. Will be removed in v1.0.0. Use {@link WebhookEndpointAdminService} and {@link WebhookDeliveryAdminService}. */
 export { WebhookAdminService } from './webhook.admin.service';
 
 // Port interfaces
@@ -86,6 +90,7 @@ export {
   DEFAULT_STALE_SENDING_MINUTES,
 } from './webhook.constants';
 
+// URL validation
 export {
   validateWebhookUrl,
   resolveAndValidateHost,
