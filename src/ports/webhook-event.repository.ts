@@ -1,3 +1,5 @@
+import { WebhookTransaction } from './webhook-delivery.repository';
+
 export interface WebhookEventRepository {
   saveEvent(
     eventType: string,
@@ -5,8 +7,9 @@ export interface WebhookEventRepository {
     tenantId: string | null,
   ): Promise<string>;
 
+  /** Use only with a transaction object received from WebhookDeliveryRepository.runInTransaction(). */
   saveEventInTransaction(
-    tx: unknown,
+    tx: WebhookTransaction,
     eventType: string,
     payload: Record<string, unknown>,
     tenantId: string | null,

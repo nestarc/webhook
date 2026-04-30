@@ -96,10 +96,10 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       // Persist delivery state — if this fails, catch resets to PENDING (safe)
       if (result.success) {
         await this.deliveryRepo.markSent(delivery.id, newAttempts, result);
-      } else if (newAttempts >= delivery.max_attempts) {
+      } else if (newAttempts >= delivery.maxAttempts) {
         await this.deliveryRepo.markFailed(delivery.id, newAttempts, result);
         this.logger.warn(
-          `Delivery ${delivery.id} exhausted retries (${newAttempts}/${delivery.max_attempts})`,
+          `Delivery ${delivery.id} exhausted retries (${newAttempts}/${delivery.maxAttempts})`,
         );
         this.fireDeliveryFailedHook(
           delivery,
@@ -121,13 +121,13 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       // Circuit breaker — failure here must NOT revert delivery state
       try {
         await this.circuitBreaker.afterDelivery(
-          delivery.endpoint_id,
+          delivery.endpointId,
           result.success,
-          { tenantId: delivery.tenant_id, url: delivery.url },
+          { tenantId: delivery.tenantId, url: delivery.url },
         );
       } catch (cbError) {
         this.logger.error(
-          `Circuit breaker update failed for ${delivery.endpoint_id}: ${cbError}`,
+          `Circuit breaker update failed for ${delivery.endpointId}: ${cbError}`,
         );
       }
     } catch (error) {
@@ -140,10 +140,10 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           latencyMs: 0,
           error: error instanceof Error ? error.message : String(error),
         };
-        if (newAttempts >= delivery.max_attempts) {
+        if (newAttempts >= delivery.maxAttempts) {
           await this.deliveryRepo.markFailed(delivery.id, newAttempts, errorResult);
           this.logger.warn(
-            `Delivery ${delivery.id} exhausted retries on exception (${newAttempts}/${delivery.max_attempts})`,
+            `Delivery ${delivery.id} exhausted retries on exception (${newAttempts}/${delivery.maxAttempts})`,
           );
           const meta: DeliveryFailureMeta =
             error instanceof WebhookUrlValidationError
@@ -186,11 +186,11 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     void Promise.resolve(
       this.options.onDeliveryFailed({
         deliveryId: delivery.id,
-        endpointId: delivery.endpoint_id,
-        eventId: delivery.event_id,
-        tenantId: delivery.tenant_id,
+        endpointId: delivery.endpointId,
+        eventId: delivery.eventId,
+        tenantId: delivery.tenantId,
         attempts,
-        maxAttempts: delivery.max_attempts,
+        maxAttempts: delivery.maxAttempts,
         lastError,
         responseStatus,
         ...meta,

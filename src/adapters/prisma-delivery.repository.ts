@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import {
+  ClaimedDelivery,
   PendingDelivery,
   WebhookDeliveryRepository,
+  WebhookTransaction,
 } from '../ports/webhook-delivery.repository';
 import {
   DeliveryAttemptRecord,
@@ -92,12 +94,12 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     );
   }
 
-  async runInTransaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+  async runInTransaction<T>(fn: (tx: WebhookTransaction) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(fn);
   }
 
-  async claimPendingDeliveries(batchSize: number): Promise<PendingDelivery[]> {
-    return this.prisma.$queryRaw<PendingDelivery[]>`
+  async claimPendingDeliveries(batchSize: number): Promise<ClaimedDelivery[]> {
+    return this.prisma.$queryRaw<ClaimedDelivery[]>`
       UPDATE webhook_deliveries
       SET status = 'SENDING', claimed_at = NOW()
       WHERE id IN (
@@ -111,17 +113,21 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       )
       RETURNING
         webhook_deliveries.id,
-        webhook_deliveries.event_id,
-        webhook_deliveries.endpoint_id,
+        webhook_deliveries.event_id AS "eventId",
+        webhook_deliveries.endpoint_id AS "endpointId",
         webhook_deliveries.attempts,
-        webhook_deliveries.max_attempts`;
+        webhook_deliveries.max_attempts AS "maxAttempts"`;
   }
 
   async enrichDeliveries(deliveryIds: string[]): Promise<PendingDelivery[]> {
     const rows = await this.prisma.$queryRaw<PendingDelivery[]>`
       SELECT
-        d.id, d.event_id, d.endpoint_id, d.attempts, d.max_attempts,
-        e.tenant_id::text AS tenant_id,
+        d.id,
+        d.event_id AS "eventId",
+        d.endpoint_id AS "endpointId",
+        d.attempts,
+        d.max_attempts AS "maxAttempts",
+        e.tenant_id::text AS "tenantId",
         COALESCE(d.endpoint_url_snapshot, e.url) AS url,
         COALESCE(d.signing_secret_snapshot, e.secret) AS secret,
         CASE
@@ -129,7 +135,8 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
           THEN ARRAY[]::text[]
           ELSE ARRAY[d.secondary_signing_secret_snapshot]
         END AS "additionalSecrets",
-        ev.event_type, ev.payload
+        ev.event_type AS "eventType",
+        ev.payload
       FROM webhook_deliveries d
       JOIN webhook_endpoints e ON e.id = d.endpoint_id
       JOIN webhook_events ev ON ev.id = d.event_id
@@ -141,7 +148,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
           const [secret, additionalSecrets] = await Promise.all([
             this.vault!.decrypt(row.secret),
             Promise.all(
-              (row.additionalSecrets ?? []).map((secret: string) =>
+              row.additionalSecrets.map((secret: string) =>
                 this.vault!.decrypt(secret),
               ),
             ),

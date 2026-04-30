@@ -5,12 +5,12 @@ import { PendingDelivery } from './ports/webhook-delivery.repository';
 
 function makeDelivery(overrides: Partial<PendingDelivery> = {}): PendingDelivery {
   return {
-    id: 'd-1', event_id: 'evt-1', endpoint_id: 'ep-1', tenant_id: null,
-    attempts: 0, max_attempts: 3,
+    id: 'd-1', eventId: 'evt-1', endpointId: 'ep-1', tenantId: null,
+    attempts: 0, maxAttempts: 3,
     url: 'https://example.com/hook',
     secret: Buffer.from('a'.repeat(32)).toString('base64'),
     additionalSecrets: [],
-    event_type: 'order.created',
+    eventType: 'order.created',
     payload: { orderId: 'ord-1' },
     ...overrides,
   };

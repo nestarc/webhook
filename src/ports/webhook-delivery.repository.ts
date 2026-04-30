@@ -5,39 +5,52 @@ import {
   DeliveryResult,
 } from '../interfaces/webhook-delivery.interface';
 
-export interface PendingDelivery {
+export type WebhookTransaction = unknown;
+
+export interface ClaimedDelivery {
   id: string;
-  event_id: string;
-  endpoint_id: string;
-  tenant_id: string | null;
+  eventId: string;
+  endpointId: string;
   attempts: number;
-  max_attempts: number;
+  maxAttempts: number;
+}
+
+export interface PendingDelivery extends ClaimedDelivery {
+  tenantId: string | null;
   url: string;
   secret: string;
-  additionalSecrets?: string[];
-  event_type: string;
+  additionalSecrets: string[];
+  eventType: string;
   payload: Record<string, unknown>;
 }
 
 export interface WebhookDeliveryRepository {
+  /**
+   * Creates queued delivery rows inside the provided transaction.
+   * No-op when endpointIds is empty.
+   */
   createDeliveriesInTransaction(
-    tx: unknown,
+    tx: WebhookTransaction,
     eventId: string,
     endpointIds: string[],
     maxAttempts: number,
   ): Promise<void>;
 
-  runInTransaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T>;
+  /** Runs the callback in one repository transaction. Pass the tx only to other *InTransaction port methods. */
+  runInTransaction<T>(fn: (tx: WebhookTransaction) => Promise<T>): Promise<T>;
 
-  claimPendingDeliveries(batchSize: number): Promise<PendingDelivery[]>;
+  /** Atomically claims pending rows and returns the minimal delivery identity needed for enrichment. */
+  claimPendingDeliveries(batchSize: number): Promise<ClaimedDelivery[]>;
   enrichDeliveries(deliveryIds: string[]): Promise<PendingDelivery[]>;
 
   markSent(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void>;
   markFailed(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void>;
   markRetry(deliveryId: string, attempts: number, nextAt: Date, result: DeliveryResult): Promise<void>;
 
+  /** @returns number of stale SENDING deliveries recovered or failed. */
   recoverStaleSending(stalenessMinutes: number): Promise<number>;
   getDeliveryLogs(endpointId: string, filters?: DeliveryLogFilters): Promise<DeliveryRecord[]>;
+  /** @returns attempts sorted by attemptNumber ASC. */
   getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]>;
   retryDelivery(deliveryId: string): Promise<boolean>;
   createTestDelivery(eventId: string, endpointId: string): Promise<void>;

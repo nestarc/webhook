@@ -32,16 +32,16 @@ export class WebhookDispatcher {
     }
 
     const body = JSON.stringify({
-      type: delivery.event_type,
+      type: delivery.eventType,
       data: delivery.payload,
     });
 
     const timestamp = Math.floor(Date.now() / 1000);
     const headers = this.signer.signAll(
-      delivery.event_id,
+      delivery.eventId,
       timestamp,
       body,
-      [delivery.secret, ...(delivery.additionalSecrets ?? [])],
+      [delivery.secret, ...delivery.additionalSecrets],
     );
 
     return this.httpClient.post(delivery.url, headers, body, this.timeout);

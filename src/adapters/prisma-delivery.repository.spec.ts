@@ -74,6 +74,41 @@ describe('PrismaDeliveryRepository', () => {
     });
   });
 
+  describe('claimPendingDeliveries', () => {
+    it('returns claimed deliveries with camelCase field aliases', async () => {
+      const prisma = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+      };
+      const repo = new PrismaDeliveryRepository(prisma);
+
+      await repo.claimPendingDeliveries(10);
+
+      const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join(' ');
+      expect(sql).toContain('event_id AS "eventId"');
+      expect(sql).toContain('endpoint_id AS "endpointId"');
+      expect(sql).toContain('max_attempts AS "maxAttempts"');
+    });
+  });
+
+  describe('enrichDeliveries', () => {
+    it('returns pending deliveries with camelCase field aliases and required additional secrets', async () => {
+      const prisma = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+      };
+      const repo = new PrismaDeliveryRepository(prisma);
+
+      await repo.enrichDeliveries(['delivery-1']);
+
+      const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join(' ');
+      expect(sql).toContain('d.event_id AS "eventId"');
+      expect(sql).toContain('d.endpoint_id AS "endpointId"');
+      expect(sql).toContain('d.max_attempts AS "maxAttempts"');
+      expect(sql).toContain('e.tenant_id::text AS "tenantId"');
+      expect(sql).toContain('ev.event_type AS "eventType"');
+      expect(sql).toContain('AS "additionalSecrets"');
+    });
+  });
+
   describe('getDeliveryLogs', () => {
     it('selects tenant ID and destination URL for public delivery records', async () => {
       const prisma = {
@@ -89,7 +124,7 @@ describe('PrismaDeliveryRepository', () => {
     });
   });
 
-  describe('enrichDeliveries', () => {
+  describe('secret vault enrichment', () => {
     it('starts vault decryptions for the full batch without waiting on earlier rows', async () => {
       const rows = [
         {

@@ -50,14 +50,14 @@ export class WebhookEndpointAdminService {
       secret = dto.secret;
     }
 
-    const endpoint = await this.endpointRepo.createEndpoint(
-      dto.url,
+    const endpoint = await this.endpointRepo.createEndpoint({
+      url: dto.url,
       secret,
-      dto.events,
-      dto.description ?? null,
-      dto.metadata ?? null,
-      dto.tenantId ?? null,
-    );
+      events: dto.events,
+      description: dto.description ?? null,
+      metadata: dto.metadata ?? null,
+      tenantId: dto.tenantId ?? null,
+    });
 
     this.logger.log(`Endpoint created: ${endpoint.id} → ${dto.url}`);
     return endpoint;

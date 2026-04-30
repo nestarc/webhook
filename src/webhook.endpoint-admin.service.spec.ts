@@ -53,7 +53,7 @@ describe('WebhookEndpointAdminService', () => {
       });
 
       // Secret arg should be a base64 string (auto-generated)
-      const secretArg = mocks.endpointRepo.createEndpoint.mock.calls[0][1];
+      const secretArg = mocks.endpointRepo.createEndpoint.mock.calls[0][0].secret;
       expect(Buffer.from(secretArg, 'base64').length).toBe(32);
     });
 
@@ -67,7 +67,7 @@ describe('WebhookEndpointAdminService', () => {
         url: 'https://example.com', events: ['*'], secret: validSecret,
       });
 
-      expect(mocks.endpointRepo.createEndpoint.mock.calls[0][1]).toBe(validSecret);
+      expect(mocks.endpointRepo.createEndpoint.mock.calls[0][0].secret).toBe(validSecret);
     });
 
     it('should reject invalid base64 secret', async () => {

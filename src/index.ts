@@ -18,10 +18,15 @@ export { WebhookAdminService } from './webhook.admin.service';
 
 // Port interfaces
 export type { WebhookEventRepository } from './ports/webhook-event.repository';
-export type { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
+export type {
+  WebhookEndpointRepository,
+  ResolvedCreateEndpointInput,
+} from './ports/webhook-endpoint.repository';
 export type {
   WebhookDeliveryRepository,
+  ClaimedDelivery,
   PendingDelivery,
+  WebhookTransaction,
 } from './ports/webhook-delivery.repository';
 export type { WebhookHttpClient } from './ports/webhook-http-client';
 export type { WebhookSecretVault } from './ports/webhook-secret-vault';

@@ -3,6 +3,7 @@ import { WebhookCircuitBreaker } from './webhook.circuit-breaker';
 import { WebhookDispatcher } from './webhook.dispatcher';
 import { WebhookRetryPolicy } from './webhook.retry-policy';
 import {
+  ClaimedDelivery,
   PendingDelivery,
   WebhookDeliveryRepository,
 } from './ports/webhook-delivery.repository';
@@ -45,14 +46,15 @@ function createMockCircuitBreaker() {
 function makeDelivery(overrides: Partial<PendingDelivery> = {}): PendingDelivery {
   return {
     id: 'd-1',
-    event_id: 'evt-1',
-    endpoint_id: 'ep-1',
-    tenant_id: 'tenant-1',
+    eventId: 'evt-1',
+    endpointId: 'ep-1',
+    tenantId: 'tenant-1',
     attempts: 0,
-    max_attempts: 3,
+    maxAttempts: 3,
     url: 'https://example.com/hook',
     secret: Buffer.from('secret').toString('base64'),
-    event_type: 'test.event',
+    additionalSecrets: [],
+    eventType: 'test.event',
     payload: { key: 'value' },
     ...overrides,
   };
@@ -103,10 +105,16 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should process deliveries and mark as SENT on success', async () => {
-      const claimed = { id: 'd-1', event_id: 'evt-1', endpoint_id: 'ep-1', attempts: 0, max_attempts: 3 };
+      const claimed: ClaimedDelivery = {
+        id: 'd-1',
+        eventId: 'evt-1',
+        endpointId: 'ep-1',
+        attempts: 0,
+        maxAttempts: 3,
+      };
       const enriched = makeDelivery();
 
-      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([claimed as PendingDelivery]);
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([claimed]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
       dispatcher.dispatch.mockResolvedValueOnce(makeSuccessResult());
 
@@ -122,7 +130,7 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should schedule retry on failure with attempts remaining', async () => {
-      const enriched = makeDelivery({ id: 'd-2', endpoint_id: 'ep-2' });
+      const enriched = makeDelivery({ id: 'd-2', endpointId: 'ep-2' });
       const nextDate = new Date(Date.now() + 30_000);
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
@@ -145,9 +153,9 @@ describe('WebhookDeliveryWorker', () => {
     it('should mark as FAILED when max retries exhausted', async () => {
       const enriched = makeDelivery({
         id: 'd-3',
-        endpoint_id: 'ep-3',
+        endpointId: 'ep-3',
         attempts: 2,
-        max_attempts: 3,
+        maxAttempts: 3,
       });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
@@ -168,7 +176,7 @@ describe('WebhookDeliveryWorker', () => {
 
   describe('dispatch — edge cases', () => {
     it('should increment attempts and apply backoff on dispatch exception', async () => {
-      const enriched = makeDelivery({ id: 'd-net', endpoint_id: 'ep-net' });
+      const enriched = makeDelivery({ id: 'd-net', endpointId: 'ep-net' });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -186,7 +194,7 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should mark FAILED on exception when retries exhausted', async () => {
-      const enriched = makeDelivery({ id: 'd-exh', endpoint_id: 'ep-exh', attempts: 2, max_attempts: 3 });
+      const enriched = makeDelivery({ id: 'd-exh', endpointId: 'ep-exh', attempts: 2, maxAttempts: 3 });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -202,7 +210,7 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should increment attempts on markSent exception', async () => {
-      const enriched = makeDelivery({ id: 'd-err', endpoint_id: 'ep-err' });
+      const enriched = makeDelivery({ id: 'd-err', endpointId: 'ep-err' });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -221,7 +229,7 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should NOT revert state when markSent succeeds but afterDelivery fails', async () => {
-      const enriched = makeDelivery({ id: 'd-cb1', endpoint_id: 'ep-cb1' });
+      const enriched = makeDelivery({ id: 'd-cb1', endpointId: 'ep-cb1' });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -237,7 +245,7 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should NOT reset to PENDING when markFailed succeeds but afterDelivery fails', async () => {
-      const enriched = makeDelivery({ id: 'd-cb2', endpoint_id: 'ep-cb2', attempts: 2, max_attempts: 3 });
+      const enriched = makeDelivery({ id: 'd-cb2', endpointId: 'ep-cb2', attempts: 2, maxAttempts: 3 });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -253,7 +261,7 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should NOT reset to PENDING when markRetry succeeds but afterDelivery fails', async () => {
-      const enriched = makeDelivery({ id: 'd-cb3', endpoint_id: 'ep-cb3' });
+      const enriched = makeDelivery({ id: 'd-cb3', endpointId: 'ep-cb3' });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -269,8 +277,8 @@ describe('WebhookDeliveryWorker', () => {
     });
 
     it('should process multiple deliveries in parallel', async () => {
-      const d1 = makeDelivery({ id: 'd-p1', endpoint_id: 'ep-p1' });
-      const d2 = makeDelivery({ id: 'd-p2', endpoint_id: 'ep-p2' });
+      const d1 = makeDelivery({ id: 'd-p1', endpointId: 'ep-p1' });
+      const d2 = makeDelivery({ id: 'd-p2', endpointId: 'ep-p2' });
 
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([d1, d2]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([d1, d2]);
@@ -296,7 +304,7 @@ describe('WebhookDeliveryWorker', () => {
         { polling: { batchSize: 10 }, onDeliveryFailed },
       );
 
-      const enriched = makeDelivery({ id: 'd-fail', endpoint_id: 'ep-fail', attempts: 2, max_attempts: 3 });
+      const enriched = makeDelivery({ id: 'd-fail', endpointId: 'ep-fail', attempts: 2, maxAttempts: 3 });
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
       dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
@@ -327,7 +335,7 @@ describe('WebhookDeliveryWorker', () => {
         { polling: { batchSize: 10 }, onDeliveryFailed },
       );
 
-      const enriched = makeDelivery({ id: 'd-exc', endpoint_id: 'ep-exc', attempts: 2, max_attempts: 3 });
+      const enriched = makeDelivery({ id: 'd-exc', endpointId: 'ep-exc', attempts: 2, maxAttempts: 3 });
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
       dispatcher.dispatch.mockRejectedValueOnce(new Error('connection reset'));
@@ -358,10 +366,10 @@ describe('WebhookDeliveryWorker', () => {
 
       const enriched = makeDelivery({
         id: 'd-val',
-        endpoint_id: 'ep-val',
+        endpointId: 'ep-val',
         url: 'http://evil.nip.io/hook',
         attempts: 2,
-        max_attempts: 3,
+        maxAttempts: 3,
       });
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -405,7 +413,7 @@ describe('WebhookDeliveryWorker', () => {
         id: 'd-val2',
         url: 'https://customer.com/hook',
         attempts: 2,
-        max_attempts: 3,
+        maxAttempts: 3,
       });
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
@@ -439,7 +447,7 @@ describe('WebhookDeliveryWorker', () => {
         { polling: { batchSize: 10 }, onDeliveryFailed },
       );
 
-      const enriched = makeDelivery({ id: 'd-cberr', attempts: 2, max_attempts: 3 });
+      const enriched = makeDelivery({ id: 'd-cberr', attempts: 2, maxAttempts: 3 });
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
       dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
@@ -461,7 +469,7 @@ describe('WebhookDeliveryWorker', () => {
         { polling: { batchSize: 10 }, onDeliveryFailed },
       );
 
-      const enriched = makeDelivery({ id: 'd-retry', attempts: 0, max_attempts: 3 });
+      const enriched = makeDelivery({ id: 'd-retry', attempts: 0, maxAttempts: 3 });
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
       dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
@@ -483,7 +491,7 @@ describe('WebhookDeliveryWorker', () => {
         { polling: { batchSize: 10 }, onDeliveryFailed },
       );
 
-      const enriched = makeDelivery({ id: 'd-global', tenant_id: null, attempts: 2, max_attempts: 3 });
+      const enriched = makeDelivery({ id: 'd-global', tenantId: null, attempts: 2, maxAttempts: 3 });
       deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
       deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
       dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());

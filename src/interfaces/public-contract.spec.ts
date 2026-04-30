@@ -7,6 +7,10 @@ import type {
   WebhookModuleAsyncOptions,
   WebhookModuleOptions,
 } from './webhook-options.interface';
+import type {
+  ClaimedDelivery,
+  PendingDelivery,
+} from '../ports/webhook-delivery.repository';
 
 describe('public interface contracts', () => {
   it('keeps runtime-only shapes reflected in exported types', () => {
@@ -68,12 +72,45 @@ describe('public interface contracts', () => {
     // @ts-expect-error Nest inject tokens cannot be arbitrary numbers.
     const asyncOptions: WebhookModuleAsyncOptions = { inject: [123] };
 
+    const claimedDelivery: ClaimedDelivery = {
+      id: 'del-1',
+      eventId: 'evt-1',
+      endpointId: 'ep-1',
+      attempts: 0,
+      maxAttempts: 3,
+    };
+
+    const pendingDelivery: PendingDelivery = {
+      ...claimedDelivery,
+      tenantId: null,
+      url: 'https://example.com/hook',
+      secret: 'secret',
+      additionalSecrets: [],
+      eventType: 'order.created',
+      payload: { orderId: 'ord-1' },
+    };
+
+    // @ts-expect-error PendingDelivery is a domain shape, not a SQL row.
+    pendingDelivery.event_id;
+
+    // @ts-expect-error additionalSecrets is always present; use an empty array when no overlap secret exists.
+    const pendingWithoutAdditionalSecrets: PendingDelivery = {
+      ...claimedDelivery,
+      tenantId: null,
+      url: 'https://example.com/hook',
+      secret: 'secret',
+      eventType: 'order.created',
+      payload: {},
+    };
+
     expect({
       attemptStatus,
       deliveryWithoutDestinationUrl,
       deliveryWithoutTenantId,
       endpointWithoutRotationExpiry,
       asyncOptions,
+      pendingDelivery,
+      pendingWithoutAdditionalSecrets,
     }).toBeDefined();
   });
 });

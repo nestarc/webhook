@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { WebhookEndpointRepository } from '../ports/webhook-endpoint.repository';
+import {
+  ResolvedCreateEndpointInput,
+  WebhookEndpointRepository,
+} from '../ports/webhook-endpoint.repository';
 import {
   EndpointRecord,
   EndpointRecordWithSecret,
@@ -84,24 +87,21 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
   }
 
   async createEndpoint(
-    url: string,
-    secret: string,
-    events: string[],
-    description: string | null,
-    metadata: Record<string, unknown> | null,
-    tenantId: string | null,
+    input: ResolvedCreateEndpointInput,
   ): Promise<EndpointRecordWithSecret> {
-    const encryptedSecret = this.vault ? await this.vault.encrypt(secret) : secret;
+    const encryptedSecret = this.vault
+      ? await this.vault.encrypt(input.secret)
+      : input.secret;
     const [endpoint]: EndpointRecordWithSecret[] = await this.prisma.$queryRawUnsafe(
       `INSERT INTO webhook_endpoints (url, secret, events, description, metadata, tenant_id)
        VALUES ($1, $2, $3::varchar[], $4, $5::jsonb, $6::uuid)
        RETURNING ${ENDPOINT_COLUMNS_WITH_SECRET}`,
-      url,
+      input.url,
       encryptedSecret,
-      events,
-      description,
-      metadata ? JSON.stringify(metadata) : null,
-      tenantId,
+      input.events,
+      input.description,
+      input.metadata ? JSON.stringify(input.metadata) : null,
+      input.tenantId,
     );
     return endpoint;
   }
