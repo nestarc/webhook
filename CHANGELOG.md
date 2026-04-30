@@ -9,11 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `DEFAULT_USER_AGENT` now includes the package version (`@nestarc/webhook/<version>`) for receiver-side debugging.
 - `WebhookEndpointRepository.disableEndpoint()` now returns `true` only when the endpoint actually transitions from active to inactive. Circuit-breaker notifications use this transition result instead of the raw failure count, so a failed disable attempt can still notify on a later successful disable.
 - `WebhookCircuitBreaker.afterDelivery()` now requires endpoint metadata (`tenantId`, `url`) so `onEndpointDisabled` receives a real endpoint URL instead of an empty-string fallback.
 
 ### Fixed
 
+- Added the `WEBHOOK_SECRET_VAULT` injection token and registered/exported the configured vault provider so custom consumers can inject the active `WebhookSecretVault`.
 - Successful deliveries no longer reactivate endpoints disabled for non-circuit-breaker reasons. `resetFailures()` only clears disabled state when `disabled_reason = 'consecutive_failures_exceeded'`.
 - Cooldown recovery now only reactivates endpoints disabled by the circuit breaker, preserving endpoints disabled for other reasons.
 
@@ -21,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Per-attempt audit log (`webhook_delivery_attempts`)** — records one row per delivery attempt with `attempt_number`, `status`, `response_status`, `response_body` (truncated at 4096 bytes), `response_body_truncated`, `latency_ms`, `last_error`, and `created_at`. Enforces uniqueness on `(delivery_id, attempt_number)`.
+- **Per-attempt audit log (`webhook_delivery_attempts`)** — records one row per delivery attempt with `attempt_number`, `status`, `response_status`, `response_body` (truncated at 4096 JavaScript string code units), `response_body_truncated`, `latency_ms`, `last_error`, and `created_at`. Enforces uniqueness on `(delivery_id, attempt_number)`.
 - **`WebhookAdminService.getDeliveryAttempts(deliveryId)`** — returns attempt history ordered by `attempt_number ASC`. The same method is exposed through `WebhookDeliveryAdminService` and the `WebhookDeliveryRepository` port.
 - **`DeliveryAttemptRecord` type export** — importable from the package root.
 - **Endpoint snapshotting on delivery creation** — adds `endpoint_url_snapshot`, `signing_secret_snapshot`, and `secondary_signing_secret_snapshot` to `webhook_deliveries`. New deliveries persist the endpoint URL and signing secrets used at enqueue time, so retries continue using the original settings even if the endpoint is edited or secrets are rotated later.

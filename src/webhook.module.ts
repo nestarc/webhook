@@ -23,6 +23,7 @@ import {
   WEBHOOK_ENDPOINT_REPOSITORY,
   WEBHOOK_DELIVERY_REPOSITORY,
   WEBHOOK_HTTP_CLIENT,
+  WEBHOOK_SECRET_VAULT,
   DEFAULT_POLLING_INTERVAL,
 } from './webhook.constants';
 import {
@@ -35,10 +36,14 @@ import { PrismaEndpointRepository } from './adapters/prisma-endpoint.repository'
 import { PrismaDeliveryRepository } from './adapters/prisma-delivery.repository';
 import { FetchHttpClient } from './adapters/fetch-http-client';
 import { PlaintextSecretVault } from './adapters/plaintext-secret-vault';
+import { WebhookSecretVault } from './ports/webhook-secret-vault';
 
 function createPortProviders(options: WebhookModuleOptions): Provider[] {
-  const vault = options.secretVault ?? new PlaintextSecretVault();
   return [
+    {
+      provide: WEBHOOK_SECRET_VAULT,
+      useFactory: () => options.secretVault ?? new PlaintextSecretVault(),
+    },
     {
       provide: WEBHOOK_EVENT_REPOSITORY,
       useFactory: () =>
@@ -46,15 +51,17 @@ function createPortProviders(options: WebhookModuleOptions): Provider[] {
     },
     {
       provide: WEBHOOK_ENDPOINT_REPOSITORY,
-      useFactory: () =>
+      useFactory: (vault: WebhookSecretVault) =>
         options.endpointRepository ??
         new PrismaEndpointRepository(options.prisma, vault),
+      inject: [WEBHOOK_SECRET_VAULT],
     },
     {
       provide: WEBHOOK_DELIVERY_REPOSITORY,
-      useFactory: () =>
+      useFactory: (vault: WebhookSecretVault) =>
         options.deliveryRepository ??
         new PrismaDeliveryRepository(options.prisma, vault),
+      inject: [WEBHOOK_SECRET_VAULT],
     },
     {
       provide: WEBHOOK_HTTP_CLIENT,
@@ -66,6 +73,12 @@ function createPortProviders(options: WebhookModuleOptions): Provider[] {
 function createAsyncPortProviders(): Provider[] {
   return [
     {
+      provide: WEBHOOK_SECRET_VAULT,
+      useFactory: (opts: WebhookModuleOptions) =>
+        opts.secretVault ?? new PlaintextSecretVault(),
+      inject: [WEBHOOK_MODULE_OPTIONS],
+    },
+    {
       provide: WEBHOOK_EVENT_REPOSITORY,
       useFactory: (opts: WebhookModuleOptions) =>
         opts.eventRepository ?? new PrismaEventRepository(opts.prisma),
@@ -73,19 +86,15 @@ function createAsyncPortProviders(): Provider[] {
     },
     {
       provide: WEBHOOK_ENDPOINT_REPOSITORY,
-      useFactory: (opts: WebhookModuleOptions) => {
-        const vault = opts.secretVault ?? new PlaintextSecretVault();
-        return opts.endpointRepository ?? new PrismaEndpointRepository(opts.prisma, vault);
-      },
-      inject: [WEBHOOK_MODULE_OPTIONS],
+      useFactory: (opts: WebhookModuleOptions, vault: WebhookSecretVault) =>
+        opts.endpointRepository ?? new PrismaEndpointRepository(opts.prisma, vault),
+      inject: [WEBHOOK_MODULE_OPTIONS, WEBHOOK_SECRET_VAULT],
     },
     {
       provide: WEBHOOK_DELIVERY_REPOSITORY,
-      useFactory: (opts: WebhookModuleOptions) => {
-        const vault = opts.secretVault ?? new PlaintextSecretVault();
-        return opts.deliveryRepository ?? new PrismaDeliveryRepository(opts.prisma, vault);
-      },
-      inject: [WEBHOOK_MODULE_OPTIONS],
+      useFactory: (opts: WebhookModuleOptions, vault: WebhookSecretVault) =>
+        opts.deliveryRepository ?? new PrismaDeliveryRepository(opts.prisma, vault),
+      inject: [WEBHOOK_MODULE_OPTIONS, WEBHOOK_SECRET_VAULT],
     },
     {
       provide: WEBHOOK_HTTP_CLIENT,
@@ -114,6 +123,11 @@ const EXPORTS = [
   WebhookDeliveryAdminService,
   WebhookAdminService,
   WebhookSigner,
+  WEBHOOK_EVENT_REPOSITORY,
+  WEBHOOK_ENDPOINT_REPOSITORY,
+  WEBHOOK_DELIVERY_REPOSITORY,
+  WEBHOOK_HTTP_CLIENT,
+  WEBHOOK_SECRET_VAULT,
 ];
 
 @Global()

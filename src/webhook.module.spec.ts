@@ -13,11 +13,13 @@ import {
   WEBHOOK_ENDPOINT_REPOSITORY,
   WEBHOOK_DELIVERY_REPOSITORY,
   WEBHOOK_HTTP_CLIENT,
+  WEBHOOK_SECRET_VAULT,
 } from './webhook.constants';
 import {
   WebhookModuleOptions,
   WebhookOptionsFactory,
 } from './interfaces/webhook-options.interface';
+import { PlaintextSecretVault } from './adapters/plaintext-secret-vault';
 
 const mockPrisma = {
   $queryRaw: jest.fn(),
@@ -81,6 +83,26 @@ describe('WebhookModule', () => {
       expect(module.get(WEBHOOK_ENDPOINT_REPOSITORY)).toBeDefined();
       expect(module.get(WEBHOOK_DELIVERY_REPOSITORY)).toBeDefined();
       expect(module.get(WEBHOOK_HTTP_CLIENT)).toBeDefined();
+      expect(module.get(WEBHOOK_SECRET_VAULT)).toBeDefined();
+    });
+
+    it('should expose the configured secret vault through the vault token', async () => {
+      const customVault = {
+        encrypt: jest.fn(async (secret: string) => `encrypted:${secret}`),
+        decrypt: jest.fn(async (secret: string) => `decrypted:${secret}`),
+      };
+
+      module = await Test.createTestingModule({
+        imports: [
+          WebhookModule.forRoot({
+            prisma: mockPrisma,
+            polling: { interval: 999_999 },
+            secretVault: customVault,
+          }),
+        ],
+      }).compile();
+
+      expect(module.get(WEBHOOK_SECRET_VAULT)).toBe(customVault);
     });
 
     it('should inject the provided options via WEBHOOK_MODULE_OPTIONS token', async () => {
@@ -166,6 +188,7 @@ describe('WebhookModule', () => {
 
       expect(factory).toHaveBeenCalledTimes(1);
       expect(module.get(WebhookService)).toBeInstanceOf(WebhookService);
+      expect(module.get(WEBHOOK_SECRET_VAULT)).toBeInstanceOf(PlaintextSecretVault);
       expect(module.get(WEBHOOK_MODULE_OPTIONS)).toEqual({
         prisma: mockPrisma,
         polling: { interval: 999_999 },

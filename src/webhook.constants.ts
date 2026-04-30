@@ -4,6 +4,9 @@ export const WEBHOOK_EVENT_REPOSITORY = 'WEBHOOK_EVENT_REPOSITORY';
 export const WEBHOOK_ENDPOINT_REPOSITORY = 'WEBHOOK_ENDPOINT_REPOSITORY';
 export const WEBHOOK_DELIVERY_REPOSITORY = 'WEBHOOK_DELIVERY_REPOSITORY';
 export const WEBHOOK_HTTP_CLIENT = 'WEBHOOK_HTTP_CLIENT';
+export const WEBHOOK_SECRET_VAULT = 'WEBHOOK_SECRET_VAULT';
+
+const { version: PACKAGE_VERSION } = require('../package.json') as { version: string };
 
 /** Svix/Stripe-style exponential backoff schedule (seconds) */
 export const DEFAULT_BACKOFF_SCHEDULE = Object.freeze([
@@ -29,6 +32,8 @@ export const DEFAULT_POLLING_INTERVAL = 5_000;
 export const DEFAULT_POLLING_BATCH_SIZE = 50;
 export const DEFAULT_STALE_SENDING_MINUTES = 5;
 
+/** Max JavaScript string length (UTF-16 code units) retained for response bodies. */
 export const RESPONSE_BODY_MAX_LENGTH = 4096;
+/** Mirrors RESPONSE_BODY_MAX_LENGTH for attempt logs; kept separate for future schema divergence. */
 export const ATTEMPT_RESPONSE_BODY_MAX_LENGTH = RESPONSE_BODY_MAX_LENGTH;
-export const DEFAULT_USER_AGENT = '@nestarc/webhook';
+export const DEFAULT_USER_AGENT = `@nestarc/webhook/${PACKAGE_VERSION}`;
