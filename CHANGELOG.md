@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-04-30
+
 ### Added
 
 - `WebhookEndpointAdminService.rotateSecret(endpointId, dto)` and `WebhookAdminService.rotateSecret(endpointId, dto)` now rotate endpoint signing secrets through the public admin API. The Prisma adapter moves the currently stored secret into `previous_secret`, encrypts the new secret through the configured `WebhookSecretVault`, and returns the new secret only once for receiver provisioning.
@@ -305,7 +307,8 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
-[Unreleased]: https://github.com/nestarc/webhook/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/nestarc/webhook/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/nestarc/webhook/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/nestarc/webhook/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/nestarc/webhook/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/nestarc/webhook/compare/v0.6.1...v0.7.0
