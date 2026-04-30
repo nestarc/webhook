@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Added the `WEBHOOK_SECRET_VAULT` injection token and registered/exported the configured vault provider so custom consumers can inject the active `WebhookSecretVault`.
+- `onDeliveryFailed` now classifies exhausted failures without an HTTP status code as `dispatch_error` instead of `http_error`.
+- `WebhookDeliveryWorker` error logs now preserve stack traces, and shutdown waits for an active poll cycle before returning.
 - Successful deliveries no longer reactivate endpoints disabled for non-circuit-breaker reasons. `resetFailures()` only clears disabled state when `disabled_reason = 'consecutive_failures_exceeded'`.
 - Cooldown recovery now only reactivates endpoints disabled by the circuit breaker, preserving endpoints disabled for other reasons.
 

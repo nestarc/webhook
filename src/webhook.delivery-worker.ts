@@ -12,6 +12,7 @@ import {
   DeliveryFailureKind,
   WebhookModuleOptions,
 } from './interfaces/webhook-options.interface';
+import { DeliveryResult } from './interfaces/webhook-delivery.interface';
 import {
   PendingDelivery,
   WebhookDeliveryRepository,
@@ -35,6 +36,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
   private readonly staleSendingMinutes: number;
   private isShuttingDown = false;
   private isPolling = false;
+  private activePollCycle: Promise<void> | null = null;
   private activeDeliveries = 0;
 
   constructor(
@@ -56,6 +58,19 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     if (this.isPolling) return;
 
     this.isPolling = true;
+    const pollCycle = this.runPollCycle();
+    this.activePollCycle = pollCycle;
+    try {
+      await pollCycle;
+    } finally {
+      if (this.activePollCycle === pollCycle) {
+        this.activePollCycle = null;
+      }
+      this.isPolling = false;
+    }
+  }
+
+  private async runPollCycle(): Promise<void> {
     try {
       await this.circuitBreaker.recoverEligibleEndpoints();
 
@@ -80,9 +95,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
         deliveries.map((delivery) => this.processDelivery(delivery)),
       );
     } catch (error) {
-      this.logger.error(`Poll cycle failed: ${error}`);
-    } finally {
-      this.isPolling = false;
+      this.logError('Poll cycle failed', error);
     }
   }
 
@@ -106,7 +119,7 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           newAttempts,
           result.error ?? null,
           result.statusCode ?? null,
-          { failureKind: 'http_error' },
+          this.classifyResultFailure(result),
         );
       } else {
         const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
@@ -126,12 +139,13 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           { tenantId: delivery.tenantId, url: delivery.url },
         );
       } catch (cbError) {
-        this.logger.error(
-          `Circuit breaker update failed for ${delivery.endpointId}: ${cbError}`,
+        this.logError(
+          `Circuit breaker update failed for ${delivery.endpointId}`,
+          cbError,
         );
       }
     } catch (error) {
-      this.logger.error(`Delivery ${delivery.id} processing error: ${error}`);
+      this.logError(`Delivery ${delivery.id} processing error`, error);
       // Increment attempts and apply backoff — never reset without accounting
       try {
         const newAttempts = delivery.attempts + 1;
@@ -166,8 +180,9 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           await this.deliveryRepo.markRetry(delivery.id, newAttempts, nextAt, errorResult);
         }
       } catch (fallbackError) {
-        this.logger.error(
-          `Delivery ${delivery.id} fallback error handling failed: ${fallbackError}`,
+        this.logError(
+          `Delivery ${delivery.id} fallback error handling failed`,
+          fallbackError,
         );
       }
     } finally {
@@ -196,8 +211,22 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
         ...meta,
       }),
     ).catch((hookError) => {
-      this.logger.error(`onDeliveryFailed callback error: ${hookError}`);
+      this.logError('onDeliveryFailed callback error', hookError);
     });
+  }
+
+  private classifyResultFailure(result: DeliveryResult): DeliveryFailureMeta {
+    return {
+      failureKind: result.statusCode == null ? 'dispatch_error' : 'http_error',
+    };
+  }
+
+  private logError(message: string, error: unknown): void {
+    if (error instanceof Error) {
+      this.logger.error(`${message}: ${error.message}`, error.stack);
+      return;
+    }
+    this.logger.error(`${message}: ${String(error)}`);
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -205,13 +234,19 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     this.logger.log('Shutting down delivery worker...');
 
     const deadline = Date.now() + 30_000;
-    while (this.activeDeliveries > 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    while (
+      (this.activePollCycle || this.activeDeliveries > 0) &&
+      Date.now() < deadline
+    ) {
+      await Promise.race([
+        this.activePollCycle ?? new Promise((resolve) => setTimeout(resolve, 100)),
+        new Promise((resolve) => setTimeout(resolve, 100)),
+      ]);
     }
 
-    if (this.activeDeliveries > 0) {
+    if (this.activePollCycle || this.activeDeliveries > 0) {
       this.logger.warn(
-        `Shutdown with ${this.activeDeliveries} active deliveries`,
+        `Shutdown with ${this.activeDeliveries} active deliveries and an unfinished poll cycle`,
       );
     }
   }

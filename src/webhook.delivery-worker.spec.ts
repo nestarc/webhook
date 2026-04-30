@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { WebhookDeliveryWorker } from './webhook.delivery-worker';
 import { WebhookCircuitBreaker } from './webhook.circuit-breaker';
 import { WebhookDispatcher } from './webhook.dispatcher';
@@ -325,6 +326,43 @@ describe('WebhookDeliveryWorker', () => {
       });
     });
 
+    it('should classify exhausted result failures without statusCode as dispatch_error', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+
+      const enriched = makeDelivery({
+        id: 'd-timeout',
+        endpointId: 'ep-timeout',
+        attempts: 2,
+        maxAttempts: 3,
+      });
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce({
+        success: false,
+        latencyMs: 10_000,
+        error: 'The operation was aborted',
+      });
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryId: 'd-timeout',
+          lastError: 'The operation was aborted',
+          responseStatus: null,
+          failureKind: 'dispatch_error',
+        }),
+      );
+    });
+
     it('should fire onDeliveryFailed on exception path when retries exhausted', async () => {
       const onDeliveryFailed = jest.fn();
       const workerWithHook = new WebhookDeliveryWorker(
@@ -519,6 +557,50 @@ describe('WebhookDeliveryWorker', () => {
 
       expect((worker as any).isShuttingDown).toBe(true);
       expect((worker as any).activeDeliveries).toBe(0);
+    });
+
+    it('should wait for an active poll cycle before completing shutdown', async () => {
+      let resolveRecovery!: () => void;
+      circuitBreaker.recoverEligibleEndpoints.mockReturnValueOnce(
+        new Promise<number>((resolve) => {
+          resolveRecovery = () => resolve(0);
+        }),
+      );
+
+      const pollPromise = worker.poll();
+      await Promise.resolve();
+
+      let shutdownComplete = false;
+      const shutdownPromise = worker.onModuleDestroy().then(() => {
+        shutdownComplete = true;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(shutdownComplete).toBe(false);
+
+      resolveRecovery();
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([]);
+      await pollPromise;
+      await shutdownPromise;
+
+      expect(shutdownComplete).toBe(true);
+    });
+  });
+
+  describe('logging', () => {
+    it('should include stack traces when poll-level errors are logged', async () => {
+      const loggerError = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      const error = new Error('claim failed');
+      deliveryRepo.claimPendingDeliveries.mockRejectedValueOnce(error);
+
+      await worker.poll();
+
+      expect(loggerError).toHaveBeenCalledWith(
+        'Poll cycle failed: claim failed',
+        error.stack,
+      );
     });
   });
 
