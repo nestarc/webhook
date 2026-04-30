@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `WebhookEndpointRepository.disableEndpoint()` now returns `true` only when the endpoint actually transitions from active to inactive. Circuit-breaker notifications use this transition result instead of the raw failure count, so a failed disable attempt can still notify on a later successful disable.
+- `WebhookCircuitBreaker.afterDelivery()` now requires endpoint metadata (`tenantId`, `url`) so `onEndpointDisabled` receives a real endpoint URL instead of an empty-string fallback.
+
+### Fixed
+
+- Successful deliveries no longer reactivate endpoints disabled for non-circuit-breaker reasons. `resetFailures()` only clears disabled state when `disabled_reason = 'consecutive_failures_exceeded'`.
+- Cooldown recovery now only reactivates endpoints disabled by the circuit breaker, preserving endpoints disabled for other reasons.
+
 ## [0.9.0] - 2026-04-19
 
 ### Added

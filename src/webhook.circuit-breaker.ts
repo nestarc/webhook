@@ -4,9 +4,15 @@ import {
   WEBHOOK_MODULE_OPTIONS,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MINUTES,
   DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
+  ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
 } from './webhook.constants';
 import { WebhookModuleOptions } from './interfaces/webhook-options.interface';
 import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
+
+interface DeliveryEndpointMeta {
+  tenantId: string | null;
+  url: string;
+}
 
 @Injectable()
 export class WebhookCircuitBreaker {
@@ -29,29 +35,31 @@ export class WebhookCircuitBreaker {
   async afterDelivery(
     endpointId: string,
     success: boolean,
-    meta?: { tenantId: string | null; url: string },
+    meta: DeliveryEndpointMeta,
   ): Promise<void> {
     if (success) {
       await this.endpointRepo.resetFailures(endpointId);
     } else {
       const failures = await this.endpointRepo.incrementFailures(endpointId);
       if (failures >= this.failureThreshold) {
-        await this.endpointRepo.disableEndpoint(
+        const disabled = await this.endpointRepo.disableEndpoint(
           endpointId,
-          'consecutive_failures_exceeded',
+          ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
         );
+        if (!disabled) return;
+
         this.logger.warn(
-          `Endpoint ${endpointId} disabled: consecutive_failures_exceeded (threshold=${this.failureThreshold})`,
+          `Endpoint ${endpointId} disabled: ${ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED} (threshold=${this.failureThreshold})`,
         );
-        // Fire hook only at exact threshold crossing to prevent duplicate notifications
-        // in multi-instance environments where concurrent failures exceed the threshold.
-        if (failures === this.failureThreshold && this.options.onEndpointDisabled) {
+        // Fire only on active->inactive transition to prevent duplicate notifications
+        // and still notify if a prior disable attempt failed at the exact threshold.
+        if (this.options.onEndpointDisabled) {
           void Promise.resolve(
             this.options.onEndpointDisabled({
               endpointId,
-              tenantId: meta?.tenantId ?? null,
-              url: meta?.url ?? '',
-              reason: 'consecutive_failures_exceeded',
+              tenantId: meta.tenantId,
+              url: meta.url,
+              reason: ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
               consecutiveFailures: failures,
             }),
           ).catch((hookError) => {

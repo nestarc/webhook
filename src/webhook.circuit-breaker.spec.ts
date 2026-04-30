@@ -1,11 +1,12 @@
 import { WebhookCircuitBreaker } from './webhook.circuit-breaker';
 import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
+import { ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED } from './webhook.constants';
 
 function createMockEndpointRepo() {
   return {
     resetFailures: jest.fn().mockResolvedValue(undefined),
     incrementFailures: jest.fn().mockResolvedValue(1),
-    disableEndpoint: jest.fn().mockResolvedValue(undefined),
+    disableEndpoint: jest.fn().mockResolvedValue(true),
     recoverEligibleEndpoints: jest.fn().mockResolvedValue(0),
   } as jest.Mocked<Pick<WebhookEndpointRepository, 'resetFailures' | 'incrementFailures' | 'disableEndpoint' | 'recoverEligibleEndpoints'>>;
 }
@@ -58,7 +59,7 @@ describe('WebhookCircuitBreaker', () => {
       expect(endpointRepo.disableEndpoint).toHaveBeenCalledTimes(1);
       expect(endpointRepo.disableEndpoint).toHaveBeenCalledWith(
         'ep-1',
-        'consecutive_failures_exceeded',
+        ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
       );
     });
   });
@@ -114,7 +115,7 @@ describe('WebhookCircuitBreaker', () => {
         endpointId: 'ep-1',
         tenantId: 'tenant-1',
         url: 'https://example.com/hook',
-        reason: 'consecutive_failures_exceeded',
+        reason: ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
         consecutiveFailures: 2,
       });
     });
@@ -153,7 +154,7 @@ describe('WebhookCircuitBreaker', () => {
       expect(onEndpointDisabled).not.toHaveBeenCalled();
     });
 
-    it('should not call callback when above threshold (prevents duplicates)', async () => {
+    it('should not call callback above threshold when the endpoint was already inactive', async () => {
       const onEndpointDisabled = jest.fn();
       const cbWithHook = new WebhookCircuitBreaker(
         endpointRepo as unknown as WebhookEndpointRepository,
@@ -164,11 +165,64 @@ describe('WebhookCircuitBreaker', () => {
       );
 
       endpointRepo.incrementFailures.mockResolvedValueOnce(4);
+      endpointRepo.disableEndpoint.mockResolvedValueOnce(false);
 
       await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
       await flush();
 
       expect(endpointRepo.disableEndpoint).toHaveBeenCalled();
+      expect(onEndpointDisabled).not.toHaveBeenCalled();
+    });
+
+    it('should call callback above threshold when disable transition succeeds after an earlier disable failure', async () => {
+      const onEndpointDisabled = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDisabled,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+      endpointRepo.disableEndpoint.mockRejectedValueOnce(new Error('db unavailable'));
+
+      await expect(
+        cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' }),
+      ).rejects.toThrow('db unavailable');
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(3);
+      endpointRepo.disableEndpoint.mockResolvedValueOnce(true);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
+      expect(onEndpointDisabled).toHaveBeenCalledTimes(1);
+      expect(onEndpointDisabled).toHaveBeenCalledWith({
+        endpointId: 'ep-1',
+        tenantId: 'tenant-1',
+        url: 'https://example.com/hook',
+        reason: ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
+        consecutiveFailures: 3,
+      });
+    });
+
+    it('should not call callback when endpoint was already inactive', async () => {
+      const onEndpointDisabled = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDisabled,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+      endpointRepo.disableEndpoint.mockResolvedValueOnce(false);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
       expect(onEndpointDisabled).not.toHaveBeenCalled();
     });
 

@@ -9,6 +9,7 @@ import {
   UpdateEndpointDto,
 } from '../interfaces/webhook-endpoint.interface';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
+import { ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED } from '../webhook.constants';
 
 /** Public columns — excludes secret */
 const ENDPOINT_COLUMNS = `
@@ -178,8 +179,23 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
   async resetFailures(endpointId: string): Promise<void> {
     await this.prisma.$executeRaw`
       UPDATE webhook_endpoints
-      SET consecutive_failures = 0, active = true,
-          disabled_at = NULL, disabled_reason = NULL, updated_at = NOW()
+      SET consecutive_failures = 0,
+          active = CASE
+            WHEN disabled_reason = ${ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED}
+              THEN true
+            ELSE active
+          END,
+          disabled_at = CASE
+            WHEN disabled_reason = ${ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED}
+              THEN NULL
+            ELSE disabled_at
+          END,
+          disabled_reason = CASE
+            WHEN disabled_reason = ${ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED}
+              THEN NULL
+            ELSE disabled_reason
+          END,
+          updated_at = NOW()
       WHERE id = ${endpointId}::uuid`;
   }
 
@@ -192,11 +208,12 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
     return updated.consecutive_failures;
   }
 
-  async disableEndpoint(endpointId: string, reason: string): Promise<void> {
-    await this.prisma.$executeRaw`
+  async disableEndpoint(endpointId: string, reason: string): Promise<boolean> {
+    const updated = await this.prisma.$executeRaw`
       UPDATE webhook_endpoints
       SET active = false, disabled_at = NOW(), disabled_reason = ${reason}, updated_at = NOW()
       WHERE id = ${endpointId}::uuid AND active = true`;
+    return updated > 0;
   }
 
   async recoverEligibleEndpoints(cooldownMinutes: number): Promise<number> {
@@ -207,6 +224,7 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
           disabled_at = NULL, disabled_reason = NULL, updated_at = NOW()
       WHERE active = false
         AND disabled_at IS NOT NULL
+        AND disabled_reason = ${ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED}
         AND disabled_at + ${cooldownInterval}::interval <= NOW()
       RETURNING id`;
     return recovered.length;

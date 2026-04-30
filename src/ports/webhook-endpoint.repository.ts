@@ -41,7 +41,8 @@ export interface WebhookEndpointRepository {
   resetFailures(endpointId: string): Promise<void>;
   /** Atomically increments consecutive failures and returns the new value. */
   incrementFailures(endpointId: string): Promise<number>;
-  disableEndpoint(endpointId: string, reason: string): Promise<void>;
+  /** @returns true when the endpoint transitioned from active to inactive. */
+  disableEndpoint(endpointId: string, reason: string): Promise<boolean>;
   /** @returns number of endpoints recovered after cooldown. */
   recoverEligibleEndpoints(cooldownMinutes: number): Promise<number>;
 }

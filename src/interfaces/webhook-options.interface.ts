@@ -9,6 +9,7 @@ import { WebhookEndpointRepository } from '../ports/webhook-endpoint.repository'
 import { WebhookDeliveryRepository } from '../ports/webhook-delivery.repository';
 import { WebhookHttpClient } from '../ports/webhook-http-client';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
+import type { EndpointDisabledReason } from '../webhook.constants';
 import { WebhookUrlValidationReason } from '../webhook.url-validator';
 
 export interface DeliveryOptions {
@@ -67,7 +68,7 @@ export interface EndpointDisabledContext {
   /** Null when the endpoint is not scoped to a tenant. */
   tenantId: string | null;
   url: string;
-  reason: string;
+  reason: EndpointDisabledReason;
   consecutiveFailures: number;
 }
 

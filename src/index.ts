@@ -87,8 +87,10 @@ export {
   DEFAULT_POLLING_BATCH_SIZE,
   DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MINUTES,
+  ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
   DEFAULT_STALE_SENDING_MINUTES,
 } from './webhook.constants';
+export type { EndpointDisabledReason } from './webhook.constants';
 
 // URL validation
 export {
