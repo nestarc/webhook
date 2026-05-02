@@ -1,19 +1,47 @@
+import { Logger } from '@nestjs/common';
 import { WebhookCircuitBreaker } from './webhook.circuit-breaker';
 import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
 import { ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED } from './webhook.constants';
+import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
+
+function makeEndpointRecord(
+  overrides: Partial<EndpointRecord> = {},
+): EndpointRecord {
+  return {
+    id: 'ep-1',
+    url: 'https://example.com/hook',
+    events: ['order.created'],
+    active: true,
+    description: null,
+    metadata: null,
+    tenantId: 'tenant-1',
+    consecutiveFailures: 0,
+    disabledAt: null,
+    disabledReason: null,
+    previousSecretExpiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
 
 function createMockEndpointRepo() {
   return {
+    getEndpoint: jest.fn().mockResolvedValue(makeEndpointRecord()),
     resetFailures: jest.fn().mockResolvedValue(undefined),
     incrementFailures: jest.fn().mockResolvedValue(1),
     disableEndpoint: jest.fn().mockResolvedValue(true),
     recoverEligibleEndpoints: jest.fn().mockResolvedValue(0),
-  } as jest.Mocked<Pick<WebhookEndpointRepository, 'resetFailures' | 'incrementFailures' | 'disableEndpoint' | 'recoverEligibleEndpoints'>>;
+  } as jest.Mocked<Pick<WebhookEndpointRepository, 'getEndpoint' | 'resetFailures' | 'incrementFailures' | 'disableEndpoint' | 'recoverEligibleEndpoints'>>;
 }
 
 describe('WebhookCircuitBreaker', () => {
   let cb: WebhookCircuitBreaker;
   let endpointRepo: ReturnType<typeof createMockEndpointRepo>;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   beforeEach(() => {
     endpointRepo = createMockEndpointRepo();
@@ -90,6 +118,196 @@ describe('WebhookCircuitBreaker', () => {
       const count = await cb.recoverEligibleEndpoints();
 
       expect(count).toBe(0);
+    });
+  });
+
+  describe('onEndpointDegraded callback', () => {
+    const flush = () => new Promise((r) => setImmediate(r));
+
+    it('should not emit degraded event when degradedThreshold is omitted', async () => {
+      const onEndpointDegraded = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
+      expect(endpointRepo.getEndpoint).not.toHaveBeenCalled();
+      expect(onEndpointDegraded).not.toHaveBeenCalled();
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('should call onEndpointDegraded at exact degraded threshold without disabling', async () => {
+      const onEndpointDegraded = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
+      expect(endpointRepo.getEndpoint).toHaveBeenCalledWith('ep-1');
+      expect(onEndpointDegraded).toHaveBeenCalledWith({
+        endpointId: 'ep-1',
+        tenantId: 'tenant-1',
+        url: 'https://example.com/hook',
+        reason: 'consecutive_failures_degraded',
+        consecutiveFailures: 2,
+        degradedThreshold: 2,
+        failureThreshold: 3,
+      });
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('should not emit degraded event above degraded threshold', async () => {
+      const onEndpointDegraded = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 5, degradedThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(3);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
+      expect(endpointRepo.getEndpoint).not.toHaveBeenCalled();
+      expect(onEndpointDegraded).not.toHaveBeenCalled();
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('should not emit degraded event when degradedThreshold is at or above failureThreshold but still disable at threshold', async () => {
+      const onEndpointDegraded = jest.fn();
+      const onEndpointDisabled = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 3, cooldownMinutes: 30 },
+          onEndpointDegraded,
+          onEndpointDisabled,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(3);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
+      expect(endpointRepo.getEndpoint).not.toHaveBeenCalled();
+      expect(onEndpointDegraded).not.toHaveBeenCalled();
+      expect(endpointRepo.disableEndpoint).toHaveBeenCalledWith(
+        'ep-1',
+        ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED,
+      );
+      expect(onEndpointDisabled).toHaveBeenCalled();
+    });
+
+    it('should not emit degraded event when endpoint is inactive', async () => {
+      const onEndpointDegraded = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+      endpointRepo.getEndpoint.mockResolvedValueOnce(makeEndpointRecord({ active: false }));
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
+      expect(endpointRepo.getEndpoint).toHaveBeenCalledWith('ep-1');
+      expect(onEndpointDegraded).not.toHaveBeenCalled();
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('should not emit degraded event when endpoint is missing', async () => {
+      const onEndpointDegraded = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+      endpointRepo.getEndpoint.mockResolvedValueOnce(null);
+
+      await cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
+      await flush();
+
+      expect(endpointRepo.getEndpoint).toHaveBeenCalledWith('ep-1');
+      expect(onEndpointDegraded).not.toHaveBeenCalled();
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('should log rejected degraded hook errors and resolve afterDelivery', async () => {
+      const loggerError = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const onEndpointDegraded = jest.fn().mockRejectedValue(new Error('callback boom'));
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+
+      await expect(
+        cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerError).toHaveBeenCalledWith(
+        'onEndpointDegraded callback error: callback boom',
+        expect.any(String),
+      );
+    });
+
+    it('should log synchronous degraded hook errors and resolve afterDelivery', async () => {
+      const loggerError = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const onEndpointDegraded = jest.fn(() => {
+        throw new Error('sync callback boom');
+      });
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+
+      await expect(
+        cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerError).toHaveBeenCalledWith(
+        'onEndpointDegraded callback error: sync callback boom',
+        expect.any(String),
+      );
     });
   });
 
