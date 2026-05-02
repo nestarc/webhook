@@ -151,6 +151,43 @@ describe('WebhookDeliveryWorker', () => {
       expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-2', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
     });
 
+    it.each([400, 401, 403, 404, 410, 422])(
+      'should mark permanent HTTP %i as FAILED without scheduling retry',
+      async (statusCode) => {
+        const enriched = makeDelivery({
+          id: `d-${statusCode}`,
+          endpointId: `ep-${statusCode}`,
+          attempts: 0,
+          maxAttempts: 5,
+        });
+        const result: DeliveryResult = {
+          success: false,
+          statusCode,
+          body: 'permanent receiver error',
+          latencyMs: 100,
+        };
+
+        deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+        deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+        dispatcher.dispatch.mockResolvedValueOnce(result);
+
+        await worker.poll();
+
+        expect(deliveryRepo.markFailed).toHaveBeenCalledWith(
+          `d-${statusCode}`,
+          1,
+          result,
+        );
+        expect(deliveryRepo.markRetry).not.toHaveBeenCalled();
+        expect(retryPolicy.nextAttemptAt).not.toHaveBeenCalled();
+        expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith(
+          `ep-${statusCode}`,
+          false,
+          { tenantId: 'tenant-1', url: 'https://example.com/hook' },
+        );
+      },
+    );
+
     it('should mark as FAILED when max retries exhausted', async () => {
       const enriched = makeDelivery({
         id: 'd-3',
@@ -322,6 +359,48 @@ describe('WebhookDeliveryWorker', () => {
         maxAttempts: 3,
         lastError: null,
         responseStatus: 500,
+        failureKind: 'http_error',
+      });
+    });
+
+    it('should fire onDeliveryFailed when delivery has a non-retryable HTTP status', async () => {
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+      const result: DeliveryResult = {
+        success: false,
+        statusCode: 410,
+        body: 'gone',
+        latencyMs: 100,
+      };
+      const enriched = makeDelivery({
+        id: 'd-gone',
+        endpointId: 'ep-gone',
+        attempts: 0,
+        maxAttempts: 5,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(result);
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryFailed).toHaveBeenCalledWith({
+        deliveryId: 'd-gone',
+        endpointId: 'ep-gone',
+        eventId: 'evt-1',
+        tenantId: 'tenant-1',
+        attempts: 1,
+        maxAttempts: 5,
+        lastError: null,
+        responseStatus: 410,
         failureKind: 'http_error',
       });
     });

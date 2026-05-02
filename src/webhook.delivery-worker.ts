@@ -17,6 +17,7 @@ import {
   PendingDelivery,
   WebhookDeliveryRepository,
 } from './ports/webhook-delivery.repository';
+import { isRetryableDeliveryResult } from './webhook.retry-classifier';
 import {
   WebhookUrlValidationError,
   WebhookUrlValidationReason,
@@ -107,8 +108,22 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       const newAttempts = delivery.attempts + 1;
 
       // Persist delivery state — if this fails, catch resets to PENDING (safe)
+      const retryable = isRetryableDeliveryResult(result);
+
       if (result.success) {
         await this.deliveryRepo.markSent(delivery.id, newAttempts, result);
+      } else if (!retryable) {
+        await this.deliveryRepo.markFailed(delivery.id, newAttempts, result);
+        this.logger.warn(
+          `Delivery ${delivery.id} failed with non-retryable HTTP status ${result.statusCode} (${newAttempts}/${delivery.maxAttempts})`,
+        );
+        this.fireDeliveryFailedHook(
+          delivery,
+          newAttempts,
+          result.error ?? null,
+          result.statusCode ?? null,
+          this.classifyResultFailure(result),
+        );
       } else if (newAttempts >= delivery.maxAttempts) {
         await this.deliveryRepo.markFailed(delivery.id, newAttempts, result);
         this.logger.warn(
