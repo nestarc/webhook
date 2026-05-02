@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Webhook deliveries now treat permanent receiver `4xx` responses as terminal failures instead of retrying them through the full backoff budget. `408`, `409`, `425`, and `429` remain retryable.
+
 ## [0.10.0] - 2026-04-30
 
 ### Added

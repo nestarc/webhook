@@ -208,12 +208,24 @@ export class WebhookController {
 | `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
-| `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts all retries. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
+| `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts retries or receives a non-retryable response. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
 | `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires once at exact threshold crossing. |
 
 The retry schedule is fixed exponential (`30s`, `5m`, `30m`, `2h`, `24h`). Use `delivery.jitter` to enable or disable random jitter.
 
-**Delivery failure classification.** `DeliveryFailedContext.failureKind` categorizes why a delivery was abandoned after all retries:
+Webhook receiver responses are classified before scheduling another attempt:
+
+| Response | Behavior |
+|---|---|
+| `2xx` | Mark delivery `SENT` |
+| `408`, `409`, `425`, `429` | Retry while attempts remain |
+| Other `4xx` | Mark delivery `FAILED` after the current attempt |
+| `5xx` | Retry while attempts remain |
+| Network, DNS, timeout, or dispatch error | Retry while attempts remain |
+
+Permanent `4xx` failures still record the response status/body, append a failed attempt log, count as a circuit-breaker failure, and trigger `onDeliveryFailed`.
+
+**Delivery failure classification.** `DeliveryFailedContext.failureKind` categorizes why a delivery was abandoned after retries are exhausted or a non-retryable receiver response is observed:
 
 | `failureKind` | When | Extra fields |
 |---|---|---|
