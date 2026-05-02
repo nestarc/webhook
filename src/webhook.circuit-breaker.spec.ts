@@ -192,6 +192,25 @@ describe('WebhookCircuitBreaker', () => {
       expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
     });
 
+    it('should not look up endpoint when degradedThreshold is configured without a degraded hook', async () => {
+      const cbWithoutHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 2, cooldownMinutes: 30 },
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+
+      await expect(
+        cbWithoutHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(endpointRepo.getEndpoint).not.toHaveBeenCalled();
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
+    });
+
     it('should not emit degraded event when degradedThreshold is at or above failureThreshold but still disable at threshold', async () => {
       const onEndpointDegraded = jest.fn();
       const onEndpointDisabled = jest.fn();
@@ -257,6 +276,34 @@ describe('WebhookCircuitBreaker', () => {
 
       expect(endpointRepo.getEndpoint).toHaveBeenCalledWith('ep-1');
       expect(onEndpointDegraded).not.toHaveBeenCalled();
+      expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('should log endpoint lookup errors and resolve afterDelivery without calling degraded hook', async () => {
+      const loggerError = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const onEndpointDegraded = jest.fn();
+      const cbWithHook = new WebhookCircuitBreaker(
+        endpointRepo as unknown as WebhookEndpointRepository,
+        {
+          circuitBreaker: { failureThreshold: 3, degradedThreshold: 2, cooldownMinutes: 30 },
+          onEndpointDegraded,
+        },
+      );
+
+      endpointRepo.incrementFailures.mockResolvedValueOnce(2);
+      endpointRepo.getEndpoint.mockRejectedValueOnce(new Error('lookup boom'));
+
+      await expect(
+        cbWithHook.afterDelivery('ep-1', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(endpointRepo.getEndpoint).toHaveBeenCalledWith('ep-1');
+      expect(onEndpointDegraded).not.toHaveBeenCalled();
+      expect(loggerError).toHaveBeenCalledWith(
+        'onEndpointDegraded lookup error: lookup boom',
+        expect.any(String),
+      );
       expect(endpointRepo.disableEndpoint).not.toHaveBeenCalled();
     });
 

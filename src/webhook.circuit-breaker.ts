@@ -68,12 +68,20 @@ export class WebhookCircuitBreaker {
     failures: number,
     meta: DeliveryEndpointMeta,
   ): Promise<void> {
+    if (!this.options.onEndpointDegraded) return;
+
     const degradedThreshold = this.degradedThreshold;
     if (degradedThreshold === undefined) return;
     if (degradedThreshold >= this.failureThreshold) return;
     if (failures !== degradedThreshold) return;
 
-    const endpoint = await this.endpointRepo.getEndpoint(endpointId);
+    let endpoint: Awaited<ReturnType<WebhookEndpointRepository['getEndpoint']>>;
+    try {
+      endpoint = await this.endpointRepo.getEndpoint(endpointId);
+    } catch (hookError) {
+      this.logError('onEndpointDegraded lookup error', hookError);
+      return;
+    }
     if (!endpoint?.active) return;
 
     this.fireEndpointDegradedHook(
