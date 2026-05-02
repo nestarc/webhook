@@ -102,9 +102,11 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
 
   private async processDelivery(delivery: PendingDelivery): Promise<void> {
     this.activeDeliveries++;
+    let dispatchReturned = false;
 
     try {
       const result = await this.dispatcher.dispatch(delivery);
+      dispatchReturned = true;
       const newAttempts = delivery.attempts + 1;
 
       // Persist delivery state — if this fails, catch resets to PENDING (safe)
@@ -144,21 +146,18 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           nextAt,
           result,
         );
+        this.fireDeliveryRetryScheduledHook(
+          delivery,
+          newAttempts,
+          nextAt,
+          result.error ?? null,
+          result.statusCode ?? null,
+          this.classifyResultFailure(result),
+        );
       }
 
       // Circuit breaker — failure here must NOT revert delivery state
-      try {
-        await this.circuitBreaker.afterDelivery(
-          delivery.endpointId,
-          result.success,
-          { tenantId: delivery.tenantId, url: delivery.url },
-        );
-      } catch (cbError) {
-        this.logError(
-          `Circuit breaker update failed for ${delivery.endpointId}`,
-          cbError,
-        );
-      }
+      await this.updateCircuitBreakerAfterDelivery(delivery, result.success);
     } catch (error) {
       this.logError(`Delivery ${delivery.id} processing error`, error);
       // Increment attempts and apply backoff — never reset without accounting
@@ -169,20 +168,14 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           latencyMs: 0,
           error: error instanceof Error ? error.message : String(error),
         };
+        const meta = this.classifyExceptionFailure(error, delivery);
+        const dispatcherException = !dispatchReturned;
+
         if (newAttempts >= delivery.maxAttempts) {
           await this.deliveryRepo.markFailed(delivery.id, newAttempts, errorResult);
           this.logger.warn(
             `Delivery ${delivery.id} exhausted retries on exception (${newAttempts}/${delivery.maxAttempts})`,
           );
-          const meta: DeliveryFailureMeta =
-            error instanceof WebhookUrlValidationError
-              ? {
-                  failureKind: 'url_validation',
-                  validationReason: error.reason,
-                  validationUrl: error.url ?? delivery.url,
-                  resolvedIp: error.resolvedIp,
-                }
-              : { failureKind: 'dispatch_error' };
           this.fireDeliveryFailedHook(
             delivery,
             newAttempts,
@@ -190,9 +183,23 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
             null,
             meta,
           );
+          if (dispatcherException) {
+            await this.updateCircuitBreakerAfterDelivery(delivery, false);
+          }
         } else {
           const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
           await this.deliveryRepo.markRetry(delivery.id, newAttempts, nextAt, errorResult);
+          if (dispatcherException) {
+            this.fireDeliveryRetryScheduledHook(
+              delivery,
+              newAttempts,
+              nextAt,
+              errorResult.error ?? null,
+              null,
+              meta,
+            );
+            await this.updateCircuitBreakerAfterDelivery(delivery, false);
+          }
         }
       } catch (fallbackError) {
         this.logError(
@@ -202,6 +209,56 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       }
     } finally {
       this.activeDeliveries--;
+    }
+  }
+
+  private async updateCircuitBreakerAfterDelivery(
+    delivery: PendingDelivery,
+    success: boolean,
+  ): Promise<void> {
+    try {
+      await this.circuitBreaker.afterDelivery(
+        delivery.endpointId,
+        success,
+        { tenantId: delivery.tenantId, url: delivery.url },
+      );
+    } catch (cbError) {
+      this.logError(
+        `Circuit breaker update failed for ${delivery.endpointId}`,
+        cbError,
+      );
+    }
+  }
+
+  private fireDeliveryRetryScheduledHook(
+    delivery: PendingDelivery,
+    attempts: number,
+    nextAttemptAt: Date,
+    lastError: string | null,
+    responseStatus: number | null,
+    meta: DeliveryFailureMeta = {},
+  ): void {
+    if (!this.options.onDeliveryRetryScheduled) return;
+
+    try {
+      void Promise.resolve(
+        this.options.onDeliveryRetryScheduled({
+          deliveryId: delivery.id,
+          endpointId: delivery.endpointId,
+          eventId: delivery.eventId,
+          tenantId: delivery.tenantId,
+          attempts,
+          maxAttempts: delivery.maxAttempts,
+          nextAttemptAt,
+          lastError,
+          responseStatus,
+          ...meta,
+        }),
+      ).catch((hookError) => {
+        this.logError('onDeliveryRetryScheduled callback error', hookError);
+      });
+    } catch (hookError) {
+      this.logError('onDeliveryRetryScheduled callback error', hookError);
     }
   }
 
@@ -233,6 +290,22 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     } catch (hookError) {
       this.logError('onDeliveryFailed callback error', hookError);
     }
+  }
+
+  private classifyExceptionFailure(
+    error: unknown,
+    delivery: PendingDelivery,
+  ): DeliveryFailureMeta {
+    if (error instanceof WebhookUrlValidationError) {
+      return {
+        failureKind: 'url_validation',
+        validationReason: error.reason,
+        validationUrl: error.url ?? delivery.url,
+        resolvedIp: error.resolvedIp,
+      };
+    }
+
+    return { failureKind: 'dispatch_error' };
   }
 
   private classifyResultFailure(result: DeliveryResult): DeliveryFailureMeta {

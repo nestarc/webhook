@@ -327,6 +327,57 @@ describe('WebhookDeliveryWorker', () => {
       expect(dispatcher.dispatch).toHaveBeenCalledTimes(2);
       expect(deliveryRepo.markSent).toHaveBeenCalledTimes(2);
     });
+
+    it('should update circuit breaker after persisted retry on retriable dispatcher exception', async () => {
+      const enriched = makeDelivery({
+        id: 'd-exception-cb-retry',
+        endpointId: 'ep-exception-cb-retry',
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(new Error('ECONNRESET'));
+
+      await worker.poll();
+
+      expect(deliveryRepo.markRetry).toHaveBeenCalledWith(
+        'd-exception-cb-retry',
+        1,
+        expect.any(Date),
+        expect.objectContaining({ success: false, error: 'ECONNRESET' }),
+      );
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith(
+        'ep-exception-cb-retry',
+        false,
+        { tenantId: 'tenant-1', url: 'https://example.com/hook' },
+      );
+    });
+
+    it('should update circuit breaker after persisted failure on terminal dispatcher exception', async () => {
+      const enriched = makeDelivery({
+        id: 'd-exception-cb-failed',
+        endpointId: 'ep-exception-cb-failed',
+        attempts: 2,
+        maxAttempts: 3,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(new Error('timeout'));
+
+      await worker.poll();
+
+      expect(deliveryRepo.markFailed).toHaveBeenCalledWith(
+        'd-exception-cb-failed',
+        3,
+        expect.objectContaining({ success: false, error: 'timeout' }),
+      );
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith(
+        'ep-exception-cb-failed',
+        false,
+        { tenantId: 'tenant-1', url: 'https://example.com/hook' },
+      );
+    });
   });
 
   describe('onDeliveryFailed callback', () => {
@@ -663,6 +714,346 @@ describe('WebhookDeliveryWorker', () => {
       expect(onDeliveryFailed).toHaveBeenCalledWith(
         expect.objectContaining({ tenantId: null }),
       );
+    });
+  });
+
+  describe('onDeliveryRetryScheduled callback', () => {
+    const flush = () => new Promise((r) => setImmediate(r));
+
+    it('should fire retry hook after retriable HTTP failure is persisted for retry', async () => {
+      const nextDate = new Date('2026-05-02T00:00:00.000Z');
+      const onDeliveryRetryScheduled = jest.fn();
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: { batchSize: 10 },
+          onDeliveryRetryScheduled,
+          onDeliveryFailed,
+        },
+      );
+      const result: DeliveryResult = {
+        success: false,
+        statusCode: 503,
+        error: 'receiver unavailable',
+        body: 'unavailable',
+        latencyMs: 100,
+      };
+      const enriched = makeDelivery({
+        id: 'd-retry-hook',
+        endpointId: 'ep-retry-hook',
+        attempts: 1,
+        maxAttempts: 4,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(result);
+      retryPolicy.nextAttemptAt.mockReturnValueOnce(nextDate);
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(deliveryRepo.markRetry).toHaveBeenCalledWith(
+        'd-retry-hook',
+        2,
+        nextDate,
+        result,
+      );
+      expect(onDeliveryRetryScheduled).toHaveBeenCalledWith({
+        deliveryId: 'd-retry-hook',
+        endpointId: 'ep-retry-hook',
+        eventId: 'evt-1',
+        tenantId: 'tenant-1',
+        attempts: 2,
+        maxAttempts: 4,
+        nextAttemptAt: nextDate,
+        lastError: 'receiver unavailable',
+        responseStatus: 503,
+        failureKind: 'http_error',
+      });
+      expect(
+        deliveryRepo.markRetry.mock.invocationCallOrder[0],
+      ).toBeLessThan(onDeliveryRetryScheduled.mock.invocationCallOrder[0]);
+      expect(onDeliveryFailed).not.toHaveBeenCalled();
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith(
+        'ep-retry-hook',
+        false,
+        { tenantId: 'tenant-1', url: 'https://example.com/hook' },
+      );
+    });
+
+    it('should not fire retry hook for final HTTP failure and still fire terminal hook', async () => {
+      const onDeliveryRetryScheduled = jest.fn();
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: { batchSize: 10 },
+          onDeliveryRetryScheduled,
+          onDeliveryFailed,
+        },
+      );
+      const enriched = makeDelivery({
+        id: 'd-final-no-retry-hook',
+        endpointId: 'ep-final-no-retry-hook',
+        attempts: 2,
+        maxAttempts: 3,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(deliveryRepo.markFailed).toHaveBeenCalledWith(
+        'd-final-no-retry-hook',
+        3,
+        expect.objectContaining({ success: false }),
+      );
+      expect(onDeliveryRetryScheduled).not.toHaveBeenCalled();
+      expect(onDeliveryFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryId: 'd-final-no-retry-hook',
+          attempts: 3,
+          failureKind: 'http_error',
+        }),
+      );
+    });
+
+    it('should not fire retry hook for non-retryable HTTP failure and still fire terminal hook', async () => {
+      const onDeliveryRetryScheduled = jest.fn();
+      const onDeliveryFailed = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: { batchSize: 10 },
+          onDeliveryRetryScheduled,
+          onDeliveryFailed,
+        },
+      );
+      const result: DeliveryResult = {
+        success: false,
+        statusCode: 410,
+        body: 'gone',
+        latencyMs: 100,
+      };
+      const enriched = makeDelivery({
+        id: 'd-gone-no-retry-hook',
+        endpointId: 'ep-gone-no-retry-hook',
+        attempts: 0,
+        maxAttempts: 5,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(result);
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(deliveryRepo.markFailed).toHaveBeenCalledWith(
+        'd-gone-no-retry-hook',
+        1,
+        result,
+      );
+      expect(onDeliveryRetryScheduled).not.toHaveBeenCalled();
+      expect(onDeliveryFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          responseStatus: 410,
+          failureKind: 'http_error',
+        }),
+      );
+    });
+
+    it('should fire retry hook for retriable dispatcher exception', async () => {
+      const nextDate = new Date('2026-05-02T00:01:00.000Z');
+      const onDeliveryRetryScheduled = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryRetryScheduled },
+      );
+      const enriched = makeDelivery({
+        id: 'd-exception-retry-hook',
+        endpointId: 'ep-exception-retry-hook',
+        attempts: 0,
+        maxAttempts: 3,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      retryPolicy.nextAttemptAt.mockReturnValueOnce(nextDate);
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryRetryScheduled).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryId: 'd-exception-retry-hook',
+          endpointId: 'ep-exception-retry-hook',
+          attempts: 1,
+          maxAttempts: 3,
+          nextAttemptAt: nextDate,
+          lastError: 'ECONNREFUSED',
+          responseStatus: null,
+          failureKind: 'dispatch_error',
+        }),
+      );
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith(
+        'ep-exception-retry-hook',
+        false,
+        { tenantId: 'tenant-1', url: 'https://example.com/hook' },
+      );
+    });
+
+    it('should fire retry hook for retriable WebhookUrlValidationError with metadata', async () => {
+      const nextDate = new Date('2026-05-02T00:02:00.000Z');
+      const onDeliveryRetryScheduled = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryRetryScheduled },
+      );
+      const enriched = makeDelivery({
+        id: 'd-validation-retry-hook',
+        endpointId: 'ep-validation-retry-hook',
+        url: 'http://evil.nip.io/hook',
+        attempts: 0,
+        maxAttempts: 3,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockRejectedValueOnce(
+        new WebhookUrlValidationError(
+          'Invalid webhook URL: "10.0.0.1" is a private address',
+          'private',
+          'http://evil.nip.io/hook',
+          '10.0.0.1',
+        ),
+      );
+      retryPolicy.nextAttemptAt.mockReturnValueOnce(nextDate);
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryRetryScheduled).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failureKind: 'url_validation',
+          validationReason: 'private',
+          validationUrl: 'http://evil.nip.io/hook',
+          resolvedIp: '10.0.0.1',
+          responseStatus: null,
+          nextAttemptAt: nextDate,
+        }),
+      );
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith(
+        'ep-validation-retry-hook',
+        false,
+        { tenantId: 'tenant-1', url: 'http://evil.nip.io/hook' },
+      );
+    });
+
+    it('should not fire retry hook when markRetry fails', async () => {
+      const onDeliveryRetryScheduled = jest.fn();
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryRetryScheduled },
+      );
+      const enriched = makeDelivery({ id: 'd-mark-retry-fail' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+      deliveryRepo.markRetry.mockRejectedValueOnce(new Error('db unavailable'));
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(onDeliveryRetryScheduled).not.toHaveBeenCalled();
+    });
+
+    it('should log rejected retry hook and not reject worker processing', async () => {
+      const loggerError = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      const onDeliveryRetryScheduled = jest
+        .fn()
+        .mockRejectedValue(new Error('callback boom'));
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryRetryScheduled },
+      );
+      const enriched = makeDelivery({ id: 'd-rejected-retry-hook' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+
+      await workerWithHook.poll();
+      await flush();
+
+      expect(deliveryRepo.markRetry).toHaveBeenCalled();
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalled();
+      expect(loggerError).toHaveBeenCalledWith(
+        'onDeliveryRetryScheduled callback error: callback boom',
+        expect.any(String),
+      );
+      loggerError.mockRestore();
+    });
+
+    it('should log synchronous retry hook throw and not retry delivery state handling', async () => {
+      const loggerError = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      const onDeliveryRetryScheduled = jest.fn(() => {
+        throw new Error('sync callback boom');
+      });
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryRetryScheduled },
+      );
+      const enriched = makeDelivery({ id: 'd-sync-retry-hook' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeFailureResult());
+
+      await workerWithHook.poll();
+
+      expect(deliveryRepo.markRetry).toHaveBeenCalledTimes(1);
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalled();
+      expect(loggerError).toHaveBeenCalledWith(
+        'onDeliveryRetryScheduled callback error: sync callback boom',
+        expect.any(String),
+      );
+      loggerError.mockRestore();
     });
   });
 
