@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `onDeliveryRetryScheduled` callback option and `DeliveryRetryScheduledContext` type for observing retriable failed attempts after retry state is persisted.
-- `circuitBreaker.degradedThreshold`, `onEndpointDegraded`, and `EndpointDegradedContext` for observing endpoint degradation before circuit-breaker disablement.
+- `onDeliveryRetryScheduled` callback option and `DeliveryRetryScheduledContext` type for internal observability after a retriable failed attempt is persisted with its next attempt time.
+- `circuitBreaker.degradedThreshold`, `onEndpointDegraded`, and `EndpointDegradedContext` for observing active endpoint degradation before circuit-breaker disablement.
 
 ### Changed
 
 - Webhook deliveries now treat permanent receiver `4xx` responses as terminal failures instead of retrying them through the full backoff budget. `408`, `409`, `425`, and `429` remain retryable.
+- Existing `onDeliveryFailed` and `onEndpointDisabled` semantics are unchanged: delivery failed remains terminal-only, and endpoint disabled remains active-to-inactive only.
 
 ### Fixed
 

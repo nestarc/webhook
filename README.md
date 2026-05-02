@@ -26,7 +26,7 @@ Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circui
 - **SSRF defense** — DNS resolution validation at registration and dispatch time
 - **Ports/adapters architecture** — swap Prisma or fetch with custom implementations
 - **Stale delivery recovery** — lease-based reaper recovers crashed worker deliveries
-- **Notification hooks** — `onDeliveryFailed` and `onEndpointDisabled` callbacks for custom alerting
+- **Notification hooks** — retry, degraded, failed, and disabled callbacks for observability and alerting
 
 ## Installation
 
@@ -76,17 +76,30 @@ import { WebhookModule } from '@nestarc/webhook';
       // See "Async configuration" below for NestJS DI wiring.
       prisma: prismaService,
       delivery: {
-        timeout: 10_000,
-        maxRetries: 5,
+        timeout: 30_000,
+        maxRetries: 6,
         jitter: true,
       },
       circuitBreaker: {
+        degradedThreshold: 3,
         failureThreshold: 5,
         cooldownMinutes: 60,
       },
       polling: {
         interval: 5000,
         batchSize: 50,
+      },
+      onDeliveryRetryScheduled: (ctx) => {
+        // Internal observability: a retry was persisted with ctx.nextAttemptAt.
+      },
+      onEndpointDegraded: (ctx) => {
+        // Alert candidate: endpoint reached the degraded threshold before disablement.
+      },
+      onDeliveryFailed: (ctx) => {
+        // Terminal delivery failure only.
+      },
+      onEndpointDisabled: (ctx) => {
+        // Endpoint transitioned from active to inactive.
       },
     }),
   ],
