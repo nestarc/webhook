@@ -212,7 +212,7 @@ export class WebhookController {
 | `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts retries or receives a non-retryable response. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
 | `onDeliveryRetryScheduled` | — | Fire-and-forget callback after a retriable failed attempt is persisted with `nextAttemptAt`. Receives `DeliveryRetryScheduledContext`. Does not fire for terminal failures. |
 | `onEndpointDegraded` | — | Fire-and-forget callback when consecutive failures reach `circuitBreaker.degradedThreshold` before endpoint disablement. Receives `EndpointDegradedContext`. |
-| `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires once at exact threshold crossing. |
+| `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires only on active-to-inactive transition after failures meet or exceed `failureThreshold`. |
 
 The retry schedule is fixed exponential (`30s`, `5m`, `30m`, `2h`, `24h`). Use `delivery.jitter` to enable or disable random jitter.
 
