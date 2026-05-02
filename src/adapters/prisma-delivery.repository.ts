@@ -183,6 +183,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
         UPDATE webhook_deliveries
         SET status = 'FAILED', attempts = ${attempts},
             last_attempt_at = NOW(), completed_at = NOW(),
+            next_attempt_at = NULL,
             response_status = ${result.statusCode ?? null},
             response_body = ${result.body ?? null},
             latency_ms = ${result.latencyMs},

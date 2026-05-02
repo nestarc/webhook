@@ -56,6 +56,28 @@ describe('PrismaDeliveryRepository', () => {
         }),
       ).rejects.toThrow('attempt log failed');
     });
+
+    it('clears next attempt timestamp when marking a delivery failed', async () => {
+      const tx = {
+        $executeRaw: jest.fn().mockResolvedValue(1),
+      };
+      const prisma = {
+        $transaction: jest.fn(async (fn: (transaction: typeof tx) => Promise<void>) =>
+          fn(tx),
+        ),
+      };
+      const repo = new PrismaDeliveryRepository(prisma);
+
+      await repo.markFailed('delivery-1', 1, {
+        success: false,
+        statusCode: 410,
+        body: 'Gone',
+        latencyMs: 100,
+      });
+
+      const sql = (tx.$executeRaw.mock.calls[0][0] as TemplateStringsArray).join(' ');
+      expect(sql).toContain('next_attempt_at = NULL');
+    });
   });
 
   describe('recoverStaleSending', () => {
