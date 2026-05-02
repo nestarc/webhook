@@ -224,7 +224,7 @@ Webhook receiver responses are classified before scheduling another attempt:
 | `5xx` | Retry while attempts remain |
 | Network, DNS, timeout, or dispatch error | Retry while attempts remain |
 
-Permanent `4xx` failures still record the response status/body, append a failed attempt log, count as a circuit-breaker failure, and trigger `onDeliveryFailed`.
+Permanent `4xx` failures still record the response status/body, append a failed attempt log, count as a circuit-breaker failure, clear `nextAttemptAt`, and trigger `onDeliveryFailed`.
 
 **Delivery failure classification.** `DeliveryFailedContext.failureKind` categorizes why a delivery was abandoned after retries are exhausted or a non-retryable receiver response is observed:
 
@@ -233,6 +233,8 @@ Permanent `4xx` failures still record the response status/body, append a failed 
 | `url_validation` | SSRF defense rejected the URL (private, loopback, link-local, etc.) | `validationReason`, `validationUrl`, `resolvedIp` |
 | `dispatch_error` | Dispatcher threw (DNS failure, ECONNREFUSED, timeout) | — |
 | `http_error` | Endpoint responded with non-2xx status | `responseStatus` |
+
+Retryable HTTP responses only trigger `onDeliveryFailed` after the attempt budget is exhausted. Non-retryable receiver responses trigger it after the current attempt. Callback errors are logged and never change persisted delivery state.
 
 ```ts
 onDeliveryFailed: (ctx) => {

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Webhook deliveries now treat permanent receiver `4xx` responses as terminal failures instead of retrying them through the full backoff budget. `408`, `409`, `425`, and `429` remain retryable.
 
+### Fixed
+
+- `WebhookDeliveryWorker` now isolates synchronous `onDeliveryFailed` callback errors as well as rejected callback promises, so notification failures cannot re-enter delivery retry handling.
+- `PrismaDeliveryRepository.markFailed()` now clears `next_attempt_at` when a delivery reaches terminal `FAILED` state, keeping delivery logs from exposing stale retry schedules.
+
 ## [0.10.0] - 2026-04-30
 
 ### Added
