@@ -22,6 +22,7 @@ export interface DeliveryOptions {
 
 export interface CircuitBreakerOptions {
   failureThreshold?: number;
+  degradedThreshold?: number;
   cooldownMinutes?: number;
 }
 
@@ -64,6 +65,28 @@ export interface DeliveryFailedContext {
   resolvedIp?: string;
 }
 
+export interface DeliveryRetryScheduledContext {
+  deliveryId: string;
+  endpointId: string;
+  eventId: string;
+  /** Null when the endpoint is not scoped to a tenant. */
+  tenantId: string | null;
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt: Date;
+  lastError: string | null;
+  responseStatus: number | null;
+
+  /** High-level classification for the failed attempt that scheduled the retry. */
+  failureKind?: DeliveryFailureKind;
+  /** Set only when `failureKind === 'url_validation'` — structured reason from `WebhookUrlValidationError`. */
+  validationReason?: WebhookUrlValidationReason;
+  /** Set only when `failureKind === 'url_validation'` — URL that triggered validation failure. */
+  validationUrl?: string;
+  /** Set only when `failureKind === 'url_validation'` and DNS resolution was involved. */
+  resolvedIp?: string;
+}
+
 export interface EndpointDisabledContext {
   endpointId: string;
   /** Null when the endpoint is not scoped to a tenant. */
@@ -71,6 +94,17 @@ export interface EndpointDisabledContext {
   url: string;
   reason: EndpointDisabledReason;
   consecutiveFailures: number;
+}
+
+export interface EndpointDegradedContext {
+  endpointId: string;
+  /** Null when the endpoint is not scoped to a tenant. */
+  tenantId: string | null;
+  url: string;
+  reason: 'consecutive_failures_degraded';
+  consecutiveFailures: number;
+  degradedThreshold: number;
+  failureThreshold: number;
 }
 
 export interface WebhookModuleOptions<TPrisma = unknown> {
@@ -91,6 +125,14 @@ export interface WebhookModuleOptions<TPrisma = unknown> {
 
   /** Called when a delivery exhausts retry attempts or receives a non-retryable response. Fire-and-forget — errors are logged, not propagated. */
   onDeliveryFailed?: (context: DeliveryFailedContext) => void | Promise<void>;
+
+  /** Called after a retriable failed attempt is persisted with a next attempt time. Fire-and-forget — errors are logged, not propagated. */
+  onDeliveryRetryScheduled?: (
+    context: DeliveryRetryScheduledContext,
+  ) => void | Promise<void>;
+
+  /** Called when consecutive failures reach the configured degraded threshold before endpoint disablement. Fire-and-forget — errors are logged, not propagated. */
+  onEndpointDegraded?: (context: EndpointDegradedContext) => void | Promise<void>;
 
   /** Called when the circuit breaker disables an endpoint. Fire-and-forget — errors are logged, not propagated. */
   onEndpointDisabled?: (context: EndpointDisabledContext) => void | Promise<void>;

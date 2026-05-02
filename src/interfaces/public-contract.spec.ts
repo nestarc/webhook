@@ -4,9 +4,16 @@ import type {
 } from './webhook-delivery.interface';
 import type { EndpointRecord } from './webhook-endpoint.interface';
 import type {
+  CircuitBreakerOptions,
+  DeliveryRetryScheduledContext,
+  EndpointDegradedContext,
   WebhookModuleAsyncOptions,
   WebhookModuleOptions,
 } from './webhook-options.interface';
+import type {
+  DeliveryRetryScheduledContext as ExportedDeliveryRetryScheduledContext,
+  EndpointDegradedContext as ExportedEndpointDegradedContext,
+} from '../index';
 import type {
   ClaimedDelivery,
   PendingDelivery,
@@ -71,6 +78,84 @@ describe('public interface contracts', () => {
       moduleOptions.prisma.$queryRaw;
     }
 
+    const circuitBreakerOptions: CircuitBreakerOptions = {
+      failureThreshold: 5,
+      degradedThreshold: 3,
+      cooldownMinutes: 60,
+    };
+
+    const retryScheduledContext: DeliveryRetryScheduledContext = {
+      deliveryId: 'del-1',
+      endpointId: 'ep-1',
+      eventId: 'evt-1',
+      tenantId: null,
+      attempts: 2,
+      maxAttempts: 5,
+      nextAttemptAt: new Date(),
+      lastError: 'receiver unavailable',
+      responseStatus: 503,
+      failureKind: 'http_error',
+    };
+
+    const endpointDegradedContext: EndpointDegradedContext = {
+      endpointId: 'ep-1',
+      tenantId: null,
+      url: 'https://example.com/hook',
+      reason: 'consecutive_failures_degraded',
+      consecutiveFailures: 3,
+      degradedThreshold: 3,
+      failureThreshold: 5,
+    };
+
+    const moduleOptionsWithHooks: WebhookModuleOptions = {
+      circuitBreaker: circuitBreakerOptions,
+      onDeliveryRetryScheduled: (context) => {
+        retryScheduledContext.nextAttemptAt = context.nextAttemptAt;
+      },
+      onEndpointDegraded: (context) => {
+        endpointDegradedContext.consecutiveFailures =
+          context.consecutiveFailures;
+      },
+    };
+
+    const exportedRetryContext: ExportedDeliveryRetryScheduledContext =
+      retryScheduledContext;
+    const exportedDegradedContext: ExportedEndpointDegradedContext =
+      endpointDegradedContext;
+
+    // @ts-expect-error DeliveryRetryScheduledContext requires nextAttemptAt.
+    const retryContextWithoutNextAttemptAt: DeliveryRetryScheduledContext = {
+      deliveryId: 'del-1',
+      endpointId: 'ep-1',
+      eventId: 'evt-1',
+      tenantId: null,
+      attempts: 2,
+      maxAttempts: 5,
+      lastError: 'receiver unavailable',
+      responseStatus: 503,
+    };
+
+    // @ts-expect-error EndpointDegradedContext requires degradedThreshold.
+    const degradedContextWithoutDegradedThreshold: EndpointDegradedContext = {
+      endpointId: 'ep-1',
+      tenantId: null,
+      url: 'https://example.com/hook',
+      reason: 'consecutive_failures_degraded',
+      consecutiveFailures: 3,
+      failureThreshold: 5,
+    };
+
+    const degradedContextWithInvalidReason: EndpointDegradedContext = {
+      endpointId: 'ep-1',
+      tenantId: null,
+      url: 'https://example.com/hook',
+      // @ts-expect-error EndpointDegradedContext has one supported reason.
+      reason: 'consecutive_failures_exceeded',
+      consecutiveFailures: 3,
+      degradedThreshold: 3,
+      failureThreshold: 5,
+    };
+
     // @ts-expect-error Nest inject tokens cannot be arbitrary numbers.
     const asyncOptions: WebhookModuleAsyncOptions = { inject: [123] };
 
@@ -118,6 +203,15 @@ describe('public interface contracts', () => {
       deliveryWithoutDestinationUrl,
       deliveryWithoutTenantId,
       endpointWithoutRotationExpiry,
+      circuitBreakerOptions,
+      retryScheduledContext,
+      endpointDegradedContext,
+      moduleOptionsWithHooks,
+      exportedRetryContext,
+      exportedDegradedContext,
+      retryContextWithoutNextAttemptAt,
+      degradedContextWithoutDegradedThreshold,
+      degradedContextWithInvalidReason,
       asyncOptions,
       arbitraryTransaction,
       pendingDelivery,

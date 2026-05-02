@@ -53,7 +53,9 @@ export type {
   PollingOptions,
   DeliveryFailedContext,
   DeliveryFailureKind,
+  DeliveryRetryScheduledContext,
   EndpointDisabledContext,
+  EndpointDegradedContext,
 } from './interfaces/webhook-options.interface';
 
 // Record types
