@@ -213,21 +213,26 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     meta: DeliveryFailureMeta = {},
   ): void {
     if (!this.options.onDeliveryFailed) return;
-    void Promise.resolve(
-      this.options.onDeliveryFailed({
-        deliveryId: delivery.id,
-        endpointId: delivery.endpointId,
-        eventId: delivery.eventId,
-        tenantId: delivery.tenantId,
-        attempts,
-        maxAttempts: delivery.maxAttempts,
-        lastError,
-        responseStatus,
-        ...meta,
-      }),
-    ).catch((hookError) => {
+
+    try {
+      void Promise.resolve(
+        this.options.onDeliveryFailed({
+          deliveryId: delivery.id,
+          endpointId: delivery.endpointId,
+          eventId: delivery.eventId,
+          tenantId: delivery.tenantId,
+          attempts,
+          maxAttempts: delivery.maxAttempts,
+          lastError,
+          responseStatus,
+          ...meta,
+        }),
+      ).catch((hookError) => {
+        this.logError('onDeliveryFailed callback error', hookError);
+      });
+    } catch (hookError) {
       this.logError('onDeliveryFailed callback error', hookError);
-    });
+    }
   }
 
   private classifyResultFailure(result: DeliveryResult): DeliveryFailureMeta {

@@ -576,6 +576,50 @@ describe('WebhookDeliveryWorker', () => {
       expect(onDeliveryFailed).toHaveBeenCalled();
     });
 
+    it('should not retry non-retryable HTTP failures when onDeliveryFailed throws synchronously', async () => {
+      const onDeliveryFailed = jest.fn(() => {
+        throw new Error('callback boom');
+      });
+      const workerWithHook = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, onDeliveryFailed },
+      );
+      const result: DeliveryResult = {
+        success: false,
+        statusCode: 410,
+        body: 'gone',
+        latencyMs: 100,
+      };
+      const enriched = makeDelivery({
+        id: 'd-sync-hook',
+        endpointId: 'ep-sync-hook',
+        attempts: 0,
+        maxAttempts: 5,
+      });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([enriched]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([enriched]);
+      dispatcher.dispatch.mockResolvedValueOnce(result);
+
+      await workerWithHook.poll();
+
+      expect(deliveryRepo.markFailed).toHaveBeenCalledWith(
+        'd-sync-hook',
+        1,
+        result,
+      );
+      expect(deliveryRepo.markRetry).not.toHaveBeenCalled();
+      expect(retryPolicy.nextAttemptAt).not.toHaveBeenCalled();
+      expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith(
+        'ep-sync-hook',
+        false,
+        { tenantId: 'tenant-1', url: 'https://example.com/hook' },
+      );
+    });
+
     it('should not call callback when retries remain', async () => {
       const onDeliveryFailed = jest.fn();
       const workerWithHook = new WebhookDeliveryWorker(
