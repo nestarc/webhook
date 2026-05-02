@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `onDeliveryRetryScheduled` callback option and `DeliveryRetryScheduledContext` type for observing retriable failed attempts after retry state is persisted.
+- `circuitBreaker.degradedThreshold`, `onEndpointDegraded`, and `EndpointDegradedContext` for observing endpoint degradation before circuit-breaker disablement.
+
 ### Changed
 
 - Webhook deliveries now treat permanent receiver `4xx` responses as terminal failures instead of retrying them through the full backoff budget. `408`, `409`, `425`, and `429` remain retryable.
 
 ### Fixed
 
+- Dispatcher exceptions such as URL validation and URL parse failures now update circuit-breaker failure accounting after the failed attempt is persisted.
 - `WebhookDeliveryWorker` now isolates synchronous `onDeliveryFailed` callback errors as well as rejected callback promises, so notification failures cannot re-enter delivery retry handling.
 - `PrismaDeliveryRepository.markFailed()` now clears `next_attempt_at` when a delivery reaches terminal `FAILED` state, keeping delivery logs from exposing stale retry schedules.
 

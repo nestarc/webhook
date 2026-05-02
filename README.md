@@ -201,6 +201,7 @@ export class WebhookController {
 | `delivery.maxRetries` | `5` | Maximum delivery attempts |
 | `delivery.jitter` | `true` | Add random jitter to retry delays |
 | `circuitBreaker.failureThreshold` | `5` | Consecutive failures before disabling endpoint |
+| `circuitBreaker.degradedThreshold` | — | Consecutive failures before firing `onEndpointDegraded`. Disabled unless configured. Must be lower than `failureThreshold`. |
 | `circuitBreaker.cooldownMinutes` | `60` | Minutes before attempting recovery |
 | `polling.enabled` | `true` | Set to `false` to disable the polling loop (API-only mode) |
 | `polling.interval` | `5000` | Delivery worker poll interval (ms) |
@@ -209,6 +210,8 @@ export class WebhookController {
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
 | `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts retries or receives a non-retryable response. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
+| `onDeliveryRetryScheduled` | — | Fire-and-forget callback after a retriable failed attempt is persisted with `nextAttemptAt`. Receives `DeliveryRetryScheduledContext`. Does not fire for terminal failures. |
+| `onEndpointDegraded` | — | Fire-and-forget callback when consecutive failures reach `circuitBreaker.degradedThreshold` before endpoint disablement. Receives `EndpointDegradedContext`. |
 | `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires once at exact threshold crossing. |
 
 The retry schedule is fixed exponential (`30s`, `5m`, `30m`, `2h`, `24h`). Use `delivery.jitter` to enable or disable random jitter.
@@ -235,6 +238,10 @@ Permanent `4xx` failures still record the response status/body, append a failed 
 | `http_error` | Endpoint responded with non-2xx status | `responseStatus` |
 
 Retryable HTTP responses only trigger `onDeliveryFailed` after the attempt budget is exhausted. Non-retryable receiver responses trigger it after the current attempt. Callback errors are logged and never change persisted delivery state.
+
+`onDeliveryRetryScheduled` fires earlier, after a retryable failed attempt has been persisted with its next attempt time. It is intended for internal observability and includes the same failure classification fields as `DeliveryFailedContext`, plus `nextAttemptAt`.
+
+`onEndpointDegraded` fires only when `circuitBreaker.degradedThreshold` is configured, the endpoint is still active, and the consecutive failure count exactly reaches that degraded threshold. It does not replace `onEndpointDisabled`, which still fires only when the endpoint transitions from active to inactive at `failureThreshold`.
 
 ```ts
 onDeliveryFailed: (ctx) => {
