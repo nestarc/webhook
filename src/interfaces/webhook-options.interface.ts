@@ -35,7 +35,8 @@ export interface PollingOptions {
 }
 
 /**
- * Category of failure that caused the delivery to exhaust retries.
+ * Category of failure that caused the delivery to stop after retry exhaustion
+ * or after a non-retryable receiver response.
  * - `url_validation`: SSRF defense rejected the URL (private/loopback/link-local/etc.)
  * - `dispatch_error`: dispatcher threw an exception (timeout, ECONNREFUSED, etc.)
  * - `http_error`: endpoint responded with a non-2xx status code
@@ -88,7 +89,7 @@ export interface WebhookModuleOptions<TPrisma = unknown> {
   /** Custom secret vault for encrypting/decrypting endpoint signing secrets at rest. Default: PlaintextSecretVault (no-op). */
   secretVault?: WebhookSecretVault;
 
-  /** Called when a delivery exhausts all retry attempts. Fire-and-forget — errors are logged, not propagated. */
+  /** Called when a delivery exhausts retry attempts or receives a non-retryable response. Fire-and-forget — errors are logged, not propagated. */
   onDeliveryFailed?: (context: DeliveryFailedContext) => void | Promise<void>;
 
   /** Called when the circuit breaker disables an endpoint. Fire-and-forget — errors are logged, not propagated. */

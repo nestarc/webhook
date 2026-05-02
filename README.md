@@ -218,6 +218,7 @@ Webhook receiver responses are classified before scheduling another attempt:
 | Response | Behavior |
 |---|---|
 | `2xx` | Mark delivery `SENT` |
+| `3xx` | Retry while attempts remain |
 | `408`, `409`, `425`, `429` | Retry while attempts remain |
 | Other `4xx` | Mark delivery `FAILED` after the current attempt |
 | `5xx` | Retry while attempts remain |

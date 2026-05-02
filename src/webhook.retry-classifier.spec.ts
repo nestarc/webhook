@@ -18,7 +18,7 @@ describe('isRetryableDeliveryResult', () => {
     },
   );
 
-  it.each([408, 409, 425, 429, 500, 502, 503, 504])(
+  it.each([302, 408, 409, 425, 429, 500, 502, 503, 504])(
     'treats transient HTTP %i as retryable',
     (statusCode) => {
       expect(isRetryableDeliveryResult(failedHttp(statusCode))).toBe(true);
