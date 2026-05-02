@@ -244,6 +244,35 @@ describe('Webhook E2E', () => {
     expect(logs[0].attempts).toBe(2);
   });
 
+  it('should fail permanent client errors without scheduling retry', async () => {
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+    });
+
+    await webhookService.send(new TestOrderEvent('ord_4_perm'));
+
+    serverResponseStatus = 410;
+    await deliveryWorker.poll();
+
+    expect(receivedRequests).toHaveLength(1);
+
+    const logs = await adminService.getDeliveryLogs(endpoint.id);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].status).toBe('FAILED');
+    expect(logs[0].attempts).toBe(1);
+    expect(logs[0].maxAttempts).toBe(3);
+    expect(logs[0].responseStatus).toBe(410);
+    expect(logs[0].nextAttemptAt).toBeNull();
+    expect(logs[0].completedAt).toBeInstanceOf(Date);
+
+    const attempts = await adminService.getDeliveryAttempts(logs[0].id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].attemptNumber).toBe(1);
+    expect(attempts[0].status).toBe('FAILED');
+    expect(attempts[0].responseStatus).toBe(410);
+  });
+
   it('should mark as FAILED after max retries exhausted', async () => {
     const endpoint = await adminService.createEndpoint({
       url: `http://localhost:${mockServerPort}/webhook`,
