@@ -210,6 +210,149 @@ describe('WebhookDeliveryWorker', () => {
       expect(circuitBreaker.afterDelivery).toHaveBeenCalledWith('ep-3', false, { tenantId: 'tenant-1', url: 'https://example.com/hook' });
       expect(deliveryRepo.markRetry).not.toHaveBeenCalled();
     });
+
+    it('limits a claim to available worker concurrency when batchSize is larger', async () => {
+      const workerWithLimit = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 5, maxConcurrency: 2 } },
+      );
+      const d1 = makeDelivery({ id: 'd-limit-1' });
+      const d2 = makeDelivery({ id: 'd-limit-2' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([d1, d2]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([d1, d2]);
+      dispatcher.dispatch.mockResolvedValue(makeSuccessResult());
+
+      await workerWithLimit.poll();
+
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenCalledWith(2);
+      expect(dispatcher.dispatch).toHaveBeenCalledTimes(2);
+      expect(deliveryRepo.markSent).toHaveBeenCalledTimes(2);
+    });
+
+    it('defaults maxConcurrency to batchSize for compatibility', async () => {
+      const d1 = makeDelivery({ id: 'd-default-1' });
+      const d2 = makeDelivery({ id: 'd-default-2' });
+      const d3 = makeDelivery({ id: 'd-default-3' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([d1, d2, d3]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([d1, d2, d3]);
+      dispatcher.dispatch.mockResolvedValue(makeSuccessResult());
+
+      await worker.poll();
+
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenCalledWith(10);
+      expect(dispatcher.dispatch).toHaveBeenCalledTimes(3);
+    });
+
+    it('reports poll and delivery metrics to the worker observer', async () => {
+      const observer = {
+        onPollStart: jest.fn(),
+        onPollComplete: jest.fn(),
+        onDeliveryComplete: jest.fn(),
+        onPollError: jest.fn(),
+      };
+      const workerWithObserver = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: { batchSize: 10, maxConcurrency: 10 },
+          workerObserver: observer,
+        },
+      );
+      const sent = makeDelivery({ id: 'd-observer-sent' });
+      const retried = makeDelivery({ id: 'd-observer-retry' });
+      const retryAt = new Date('2026-05-03T00:00:00.000Z');
+
+      deliveryRepo.recoverStaleSending.mockResolvedValueOnce(3);
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([sent, retried]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([sent, retried]);
+      dispatcher.dispatch
+        .mockResolvedValueOnce(makeSuccessResult())
+        .mockResolvedValueOnce(makeFailureResult());
+      retryPolicy.nextAttemptAt.mockReturnValueOnce(retryAt);
+
+      await workerWithObserver.poll();
+
+      expect(observer.onPollStart).toHaveBeenCalledWith({
+        batchSize: 10,
+        maxConcurrency: 10,
+        drainWhileBacklogged: false,
+        maxDrainLoopsPerPoll: 1,
+        drainLoopDelayMs: 0,
+        activeDeliveries: 0,
+      });
+      expect(observer.onDeliveryComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryId: 'd-observer-sent',
+          status: 'sent',
+          responseStatus: 200,
+        }),
+      );
+      expect(observer.onDeliveryComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deliveryId: 'd-observer-retry',
+          status: 'retried',
+          responseStatus: 500,
+          nextAttemptAt: retryAt,
+          failureKind: 'http_error',
+        }),
+      );
+      expect(observer.onPollComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          claimed: 2,
+          enriched: 2,
+          sent: 1,
+          failed: 0,
+          retried: 1,
+          recoveredStale: 3,
+          loops: 1,
+          durationMs: expect.any(Number),
+        }),
+      );
+      expect(observer.onPollError).not.toHaveBeenCalled();
+    });
+
+    it('logs observer errors without failing delivery processing', async () => {
+      const loggerError = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      const observer = {
+        onDeliveryComplete: jest.fn(() => {
+          throw new Error('observer failed');
+        }),
+      };
+      const workerWithObserver = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, workerObserver: observer },
+      );
+      const delivery = makeDelivery({ id: 'd-observer-error' });
+
+      deliveryRepo.claimPendingDeliveries.mockResolvedValueOnce([delivery]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([delivery]);
+      dispatcher.dispatch.mockResolvedValueOnce(makeSuccessResult());
+
+      await workerWithObserver.poll();
+
+      expect(deliveryRepo.markSent).toHaveBeenCalledWith(
+        'd-observer-error',
+        1,
+        expect.objectContaining({ success: true }),
+      );
+      expect(loggerError).toHaveBeenCalledWith(
+        'workerObserver.onDeliveryComplete callback error: observer failed',
+        expect.any(String),
+      );
+      loggerError.mockRestore();
+    });
   });
 
   describe('dispatch — edge cases', () => {
@@ -1114,6 +1257,34 @@ describe('WebhookDeliveryWorker', () => {
       expect(loggerError).toHaveBeenCalledWith(
         'Poll cycle failed: claim failed',
         error.stack,
+      );
+    });
+
+    it('notifies observer when a poll-level error occurs', async () => {
+      const observer = { onPollError: jest.fn(), onPollComplete: jest.fn() };
+      const workerWithObserver = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        { polling: { batchSize: 10 }, workerObserver: observer },
+      );
+      const error = new Error('claim failed');
+
+      deliveryRepo.claimPendingDeliveries.mockRejectedValueOnce(error);
+
+      await workerWithObserver.poll();
+
+      expect(observer.onPollError).toHaveBeenCalledWith(error);
+      expect(observer.onPollComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          claimed: 0,
+          enriched: 0,
+          sent: 0,
+          failed: 0,
+          retried: 0,
+          loops: 0,
+        }),
       );
     });
   });

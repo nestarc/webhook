@@ -10,7 +10,10 @@ import {
 } from './webhook.constants';
 import {
   DeliveryFailureKind,
+  WebhookDeliveryProcessingResult,
   WebhookModuleOptions,
+  WebhookPollContext,
+  WebhookPollResult,
 } from './interfaces/webhook-options.interface';
 import { DeliveryResult } from './interfaces/webhook-delivery.interface';
 import {
@@ -34,7 +37,14 @@ interface DeliveryFailureMeta {
 export class WebhookDeliveryWorker implements OnModuleDestroy {
   private readonly logger = new Logger(WebhookDeliveryWorker.name);
   private readonly batchSize: number;
+  private readonly maxConcurrency: number;
+  private readonly drainWhileBacklogged: boolean;
+  private readonly maxDrainLoopsPerPoll: number;
+  private readonly drainLoopDelayMs: number;
   private readonly staleSendingMinutes: number;
+  private readonly activeDeliveryTasks = new Set<
+    Promise<WebhookDeliveryProcessingResult | null>
+  >();
   private isShuttingDown = false;
   private isPolling = false;
   private activePollCycle: Promise<void> | null = null;
@@ -49,7 +59,24 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     @Inject(WEBHOOK_MODULE_OPTIONS)
     private readonly options: WebhookModuleOptions,
   ) {
-    this.batchSize = options.polling?.batchSize ?? DEFAULT_POLLING_BATCH_SIZE;
+    this.batchSize = this.positiveInteger(
+      options.polling?.batchSize,
+      DEFAULT_POLLING_BATCH_SIZE,
+    );
+    this.maxConcurrency = this.positiveInteger(
+      options.polling?.maxConcurrency,
+      this.batchSize,
+    );
+    this.drainWhileBacklogged =
+      options.polling?.drainWhileBacklogged ?? false;
+    this.maxDrainLoopsPerPoll = this.positiveInteger(
+      options.polling?.maxDrainLoopsPerPoll,
+      this.drainWhileBacklogged ? 10 : 1,
+    );
+    this.drainLoopDelayMs = this.nonNegativeInteger(
+      options.polling?.drainLoopDelayMs,
+      0,
+    );
     this.staleSendingMinutes =
       options.polling?.staleSendingMinutes ?? DEFAULT_STALE_SENDING_MINUTES;
   }
@@ -72,6 +99,11 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
   }
 
   private async runPollCycle(): Promise<void> {
+    const startedAt = Date.now();
+    const pollResult = this.createEmptyPollResult();
+
+    this.notifyObserver('onPollStart', this.createPollContext());
+
     try {
       await this.circuitBreaker.recoverEligibleEndpoints();
 
@@ -79,28 +111,78 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       const recovered = await this.deliveryRepo.recoverStaleSending(
         this.staleSendingMinutes,
       );
+      pollResult.recoveredStale = recovered;
       if (recovered > 0) {
         this.logger.warn(`Recovered ${recovered} stale SENDING deliveries`);
       }
 
-      const claimed = await this.deliveryRepo.claimPendingDeliveries(
-        this.batchSize,
-      );
-      if (claimed.length === 0) return;
+      let shouldContinue = true;
+      while (shouldContinue && pollResult.loops < this.maxDrainLoopsPerPoll) {
+        const capacity = this.availableCapacity();
+        if (capacity <= 0) break;
 
-      const deliveries = await this.deliveryRepo.enrichDeliveries(
-        claimed.map((d) => d.id),
-      );
+        const claimLimit = Math.min(this.batchSize, capacity);
+        const claimed = await this.deliveryRepo.claimPendingDeliveries(
+          claimLimit,
+        );
+        pollResult.loops++;
+        pollResult.claimed += claimed.length;
+        if (claimed.length === 0) break;
 
-      await Promise.all(
-        deliveries.map((delivery) => this.processDelivery(delivery)),
-      );
+        const deliveries = await this.deliveryRepo.enrichDeliveries(
+          claimed.map((d) => d.id),
+        );
+        pollResult.enriched += deliveries.length;
+
+        await Promise.all(
+          deliveries.map((delivery) =>
+            this.scheduleDelivery(delivery, pollResult),
+          ),
+        );
+
+        shouldContinue =
+          this.drainWhileBacklogged && claimed.length === claimLimit;
+        if (
+          shouldContinue &&
+          this.drainLoopDelayMs > 0 &&
+          pollResult.loops < this.maxDrainLoopsPerPoll
+        ) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.drainLoopDelayMs),
+          );
+        }
+      }
     } catch (error) {
+      this.notifyObserver('onPollError', error);
       this.logError('Poll cycle failed', error);
+    } finally {
+      pollResult.durationMs = Date.now() - startedAt;
+      this.notifyObserver('onPollComplete', pollResult);
     }
   }
 
-  private async processDelivery(delivery: PendingDelivery): Promise<void> {
+  private scheduleDelivery(
+    delivery: PendingDelivery,
+    pollResult: WebhookPollResult,
+  ): Promise<WebhookDeliveryProcessingResult | null> {
+    const task = this.processDelivery(delivery).then((result) => {
+      if (result) {
+        pollResult[result.status]++;
+        this.notifyObserver('onDeliveryComplete', result);
+      }
+      return result;
+    });
+
+    this.activeDeliveryTasks.add(task);
+    task.finally(() => {
+      this.activeDeliveryTasks.delete(task);
+    });
+    return task;
+  }
+
+  private async processDelivery(
+    delivery: PendingDelivery,
+  ): Promise<WebhookDeliveryProcessingResult | null> {
     this.activeDeliveries++;
     let dispatchReturned = false;
 
@@ -114,6 +196,13 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
 
       if (result.success) {
         await this.deliveryRepo.markSent(delivery.id, newAttempts, result);
+        await this.updateCircuitBreakerAfterDelivery(delivery, true);
+        return this.createDeliveryProcessingResult(
+          delivery,
+          newAttempts,
+          'sent',
+          result,
+        );
       } else if (!retryable) {
         await this.deliveryRepo.markFailed(delivery.id, newAttempts, result);
         this.logger.warn(
@@ -126,6 +215,14 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           result.statusCode ?? null,
           this.classifyResultFailure(result),
         );
+        await this.updateCircuitBreakerAfterDelivery(delivery, false);
+        return this.createDeliveryProcessingResult(
+          delivery,
+          newAttempts,
+          'failed',
+          result,
+          this.classifyResultFailure(result),
+        );
       } else if (newAttempts >= delivery.maxAttempts) {
         await this.deliveryRepo.markFailed(delivery.id, newAttempts, result);
         this.logger.warn(
@@ -136,6 +233,14 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           newAttempts,
           result.error ?? null,
           result.statusCode ?? null,
+          this.classifyResultFailure(result),
+        );
+        await this.updateCircuitBreakerAfterDelivery(delivery, false);
+        return this.createDeliveryProcessingResult(
+          delivery,
+          newAttempts,
+          'failed',
+          result,
           this.classifyResultFailure(result),
         );
       } else {
@@ -154,10 +259,16 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           result.statusCode ?? null,
           this.classifyResultFailure(result),
         );
+        await this.updateCircuitBreakerAfterDelivery(delivery, false);
+        return this.createDeliveryProcessingResult(
+          delivery,
+          newAttempts,
+          'retried',
+          result,
+          this.classifyResultFailure(result),
+          nextAt,
+        );
       }
-
-      // Circuit breaker — failure here must NOT revert delivery state
-      await this.updateCircuitBreakerAfterDelivery(delivery, result.success);
     } catch (error) {
       this.logError(`Delivery ${delivery.id} processing error`, error);
       // Increment attempts and apply backoff — never reset without accounting
@@ -186,6 +297,13 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
           if (dispatcherException) {
             await this.updateCircuitBreakerAfterDelivery(delivery, false);
           }
+          return this.createDeliveryProcessingResult(
+            delivery,
+            newAttempts,
+            'failed',
+            errorResult,
+            meta,
+          );
         } else {
           const nextAt = this.retryPolicy.nextAttemptAt(newAttempts);
           await this.deliveryRepo.markRetry(delivery.id, newAttempts, nextAt, errorResult);
@@ -200,16 +318,119 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
             );
             await this.updateCircuitBreakerAfterDelivery(delivery, false);
           }
+          return this.createDeliveryProcessingResult(
+            delivery,
+            newAttempts,
+            'retried',
+            errorResult,
+            meta,
+            nextAt,
+          );
         }
       } catch (fallbackError) {
         this.logError(
           `Delivery ${delivery.id} fallback error handling failed`,
           fallbackError,
         );
+        return null;
       }
     } finally {
       this.activeDeliveries--;
     }
+  }
+
+  private positiveInteger(value: number | undefined, fallback: number): number {
+    return typeof value === 'number' && Number.isInteger(value) && value > 0
+      ? value
+      : fallback;
+  }
+
+  private nonNegativeInteger(value: number | undefined, fallback: number): number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0
+      ? value
+      : fallback;
+  }
+
+  private availableCapacity(): number {
+    return Math.max(0, this.maxConcurrency - this.activeDeliveryTasks.size);
+  }
+
+  private createPollContext(): WebhookPollContext {
+    return {
+      batchSize: this.batchSize,
+      maxConcurrency: this.maxConcurrency,
+      drainWhileBacklogged: this.drainWhileBacklogged,
+      maxDrainLoopsPerPoll: this.maxDrainLoopsPerPoll,
+      drainLoopDelayMs: this.drainLoopDelayMs,
+      activeDeliveries: this.activeDeliveries,
+    };
+  }
+
+  private createEmptyPollResult(): WebhookPollResult {
+    return {
+      claimed: 0,
+      enriched: 0,
+      sent: 0,
+      failed: 0,
+      retried: 0,
+      recoveredStale: 0,
+      durationMs: 0,
+      loops: 0,
+    };
+  }
+
+  private notifyObserver<
+    TCallback extends keyof NonNullable<WebhookModuleOptions['workerObserver']>,
+  >(
+    callbackName: TCallback,
+    payload: Parameters<
+      NonNullable<NonNullable<WebhookModuleOptions['workerObserver']>[TCallback]>
+    >[0],
+  ): void {
+    const callback = this.options.workerObserver?.[callbackName];
+    if (!callback) return;
+
+    try {
+      void Promise.resolve(
+        (callback as (payload: unknown) => void | Promise<void>)(
+          payload,
+        ),
+      ).catch((observerError) => {
+        this.logError(
+          `workerObserver.${String(callbackName)} callback error`,
+          observerError,
+        );
+      });
+    } catch (observerError) {
+      this.logError(
+        `workerObserver.${String(callbackName)} callback error`,
+        observerError,
+      );
+    }
+  }
+
+  private createDeliveryProcessingResult(
+    delivery: PendingDelivery,
+    attempts: number,
+    status: WebhookDeliveryProcessingResult['status'],
+    result: DeliveryResult,
+    meta: DeliveryFailureMeta = {},
+    nextAttemptAt?: Date,
+  ): WebhookDeliveryProcessingResult {
+    return {
+      deliveryId: delivery.id,
+      endpointId: delivery.endpointId,
+      eventId: delivery.eventId,
+      tenantId: delivery.tenantId,
+      attempts,
+      maxAttempts: delivery.maxAttempts,
+      status,
+      responseStatus: result.statusCode ?? null,
+      lastError: result.error ?? null,
+      latencyMs: result.latencyMs ?? null,
+      ...(nextAttemptAt ? { nextAttemptAt } : {}),
+      ...meta,
+    };
   }
 
   private async updateCircuitBreakerAfterDelivery(
