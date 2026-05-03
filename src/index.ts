@@ -30,6 +30,7 @@ export type {
 export type {
   WebhookDeliveryRepository,
   ClaimedDelivery,
+  DeliveryBacklogSummary,
   PendingDelivery,
   WebhookTransaction,
 } from './ports/webhook-delivery.repository';
@@ -51,6 +52,11 @@ export type {
   DeliveryOptions,
   CircuitBreakerOptions,
   PollingOptions,
+  WebhookPollContext,
+  WebhookPollResult,
+  WebhookDeliveryProcessingStatus,
+  WebhookDeliveryProcessingResult,
+  WebhookWorkerObserver,
   DeliveryFailedContext,
   DeliveryFailureKind,
   DeliveryRetryScheduledContext,

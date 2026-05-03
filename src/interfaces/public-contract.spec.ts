@@ -7,15 +7,26 @@ import type {
   CircuitBreakerOptions,
   DeliveryRetryScheduledContext,
   EndpointDegradedContext,
+  PollingOptions,
+  WebhookDeliveryProcessingResult,
   WebhookModuleAsyncOptions,
   WebhookModuleOptions,
+  WebhookPollContext,
+  WebhookPollResult,
+  WebhookWorkerObserver,
 } from './webhook-options.interface';
 import type {
+  DeliveryBacklogSummary as ExportedDeliveryBacklogSummary,
   DeliveryRetryScheduledContext as ExportedDeliveryRetryScheduledContext,
   EndpointDegradedContext as ExportedEndpointDegradedContext,
+  WebhookDeliveryProcessingResult as ExportedWebhookDeliveryProcessingResult,
+  WebhookPollContext as ExportedWebhookPollContext,
+  WebhookPollResult as ExportedWebhookPollResult,
+  WebhookWorkerObserver as ExportedWebhookWorkerObserver,
 } from '../index';
 import type {
   ClaimedDelivery,
+  DeliveryBacklogSummary,
   PendingDelivery,
   WebhookTransaction,
 } from '../ports/webhook-delivery.repository';
@@ -118,10 +129,114 @@ describe('public interface contracts', () => {
       },
     };
 
+    const pollingOptions: PollingOptions = {
+      enabled: true,
+      interval: 1_000,
+      batchSize: 100,
+      staleSendingMinutes: 5,
+      maxConcurrency: 200,
+      drainWhileBacklogged: true,
+      maxDrainLoopsPerPoll: 10,
+      drainLoopDelayMs: 5,
+    };
+
+    const pollContext: WebhookPollContext = {
+      batchSize: 100,
+      maxConcurrency: 200,
+      drainWhileBacklogged: true,
+      maxDrainLoopsPerPoll: 10,
+      drainLoopDelayMs: 5,
+      activeDeliveries: 0,
+    };
+
+    const pollResult: WebhookPollResult = {
+      claimed: 4,
+      enriched: 4,
+      sent: 2,
+      failed: 1,
+      retried: 1,
+      recoveredStale: 0,
+      durationMs: 25,
+      loops: 2,
+    };
+
+    const deliveryProcessingResult: WebhookDeliveryProcessingResult = {
+      deliveryId: 'del-1',
+      endpointId: 'ep-1',
+      eventId: 'evt-1',
+      tenantId: null,
+      attempts: 1,
+      maxAttempts: 3,
+      status: 'retried',
+      responseStatus: 503,
+      lastError: 'receiver unavailable',
+      latencyMs: 100,
+      nextAttemptAt: new Date(),
+      failureKind: 'http_error',
+    };
+
+    const backlogSummary: DeliveryBacklogSummary = {
+      pendingCount: 3,
+      sendingCount: 2,
+      runnablePendingCount: 1,
+      oldestPendingAgeMs: 12_000,
+      oldestRunnableAgeMs: 12_000,
+    };
+
+    const workerObserver: WebhookWorkerObserver = {
+      onPollStart: (context) => {
+        pollContext.maxConcurrency = context.maxConcurrency;
+      },
+      onPollComplete: (result) => {
+        pollResult.claimed = result.claimed;
+      },
+      onDeliveryComplete: (result) => {
+        deliveryProcessingResult.status = result.status;
+      },
+      onPollError: (error) => {
+        String(error);
+      },
+    };
+
+    const moduleOptionsWithWorkerObserver: WebhookModuleOptions = {
+      polling: pollingOptions,
+      workerObserver,
+    };
+
     const exportedRetryContext: ExportedDeliveryRetryScheduledContext =
       retryScheduledContext;
     const exportedDegradedContext: ExportedEndpointDegradedContext =
       endpointDegradedContext;
+    const exportedPollContext: ExportedWebhookPollContext = pollContext;
+    const exportedPollResult: ExportedWebhookPollResult = pollResult;
+    const exportedDeliveryProcessingResult: ExportedWebhookDeliveryProcessingResult =
+      deliveryProcessingResult;
+    const exportedWorkerObserver: ExportedWebhookWorkerObserver = workerObserver;
+    const exportedBacklogSummary: ExportedDeliveryBacklogSummary = backlogSummary;
+
+    const pollingOptionsWithInvalidConcurrency: PollingOptions = {
+      // @ts-expect-error maxConcurrency must be numeric.
+      maxConcurrency: '200',
+    };
+
+    // @ts-expect-error WebhookPollResult requires loops.
+    const pollResultWithoutLoops: WebhookPollResult = {
+      claimed: 1,
+      enriched: 1,
+      sent: 1,
+      failed: 0,
+      retried: 0,
+      recoveredStale: 0,
+      durationMs: 10,
+    };
+
+    // @ts-expect-error DeliveryBacklogSummary requires runnablePendingCount.
+    const backlogSummaryWithoutRunnable: DeliveryBacklogSummary = {
+      pendingCount: 1,
+      sendingCount: 0,
+      oldestPendingAgeMs: 1_000,
+      oldestRunnableAgeMs: 1_000,
+    };
 
     // @ts-expect-error DeliveryRetryScheduledContext requires nextAttemptAt.
     const retryContextWithoutNextAttemptAt: DeliveryRetryScheduledContext = {
@@ -207,8 +322,23 @@ describe('public interface contracts', () => {
       retryScheduledContext,
       endpointDegradedContext,
       moduleOptionsWithHooks,
+      pollingOptions,
+      pollContext,
+      pollResult,
+      deliveryProcessingResult,
+      backlogSummary,
+      workerObserver,
+      moduleOptionsWithWorkerObserver,
       exportedRetryContext,
       exportedDegradedContext,
+      exportedPollContext,
+      exportedPollResult,
+      exportedDeliveryProcessingResult,
+      exportedWorkerObserver,
+      exportedBacklogSummary,
+      pollingOptionsWithInvalidConcurrency,
+      pollResultWithoutLoops,
+      backlogSummaryWithoutRunnable,
       retryContextWithoutNextAttemptAt,
       degradedContextWithoutDegradedThreshold,
       degradedContextWithInvalidReason,

@@ -31,6 +31,14 @@ export interface PendingDelivery extends ClaimedDelivery {
   payload: Record<string, unknown>;
 }
 
+export interface DeliveryBacklogSummary {
+  pendingCount: number;
+  sendingCount: number;
+  runnablePendingCount: number;
+  oldestPendingAgeMs: number | null;
+  oldestRunnableAgeMs: number | null;
+}
+
 export interface WebhookDeliveryRepository {
   /**
    * Creates queued delivery rows inside the provided transaction.
@@ -56,6 +64,7 @@ export interface WebhookDeliveryRepository {
 
   /** @returns number of stale SENDING deliveries recovered or failed. */
   recoverStaleSending(stalenessMinutes: number): Promise<number>;
+  getBacklogSummary?(): Promise<DeliveryBacklogSummary>;
   getDeliveryLogs(endpointId: string, filters?: DeliveryLogFilters): Promise<DeliveryRecord[]>;
   /** @returns attempts sorted by attemptNumber ASC. */
   getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]>;

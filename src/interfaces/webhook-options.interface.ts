@@ -33,6 +33,61 @@ export interface PollingOptions {
   batchSize?: number;
   /** Minutes before a SENDING delivery is considered stale and reset to PENDING. Default: 5 */
   staleSendingMinutes?: number;
+  /** Maximum delivery dispatches in flight per worker process. Default: batchSize */
+  maxConcurrency?: number;
+  /** When true, one poll cycle keeps claiming while backlog and capacity remain. Default: false */
+  drainWhileBacklogged?: boolean;
+  /** Maximum claim/drain loops inside one poll cycle. Default: 1, or 10 when drainWhileBacklogged is true */
+  maxDrainLoopsPerPoll?: number;
+  /** Optional sleep between continuous drain loops. Default: 0 */
+  drainLoopDelayMs?: number;
+}
+
+export interface WebhookPollContext {
+  batchSize: number;
+  maxConcurrency: number;
+  drainWhileBacklogged: boolean;
+  maxDrainLoopsPerPoll: number;
+  drainLoopDelayMs: number;
+  activeDeliveries: number;
+}
+
+export interface WebhookPollResult {
+  claimed: number;
+  enriched: number;
+  sent: number;
+  failed: number;
+  retried: number;
+  recoveredStale: number;
+  durationMs: number;
+  loops: number;
+}
+
+export type WebhookDeliveryProcessingStatus = 'sent' | 'failed' | 'retried';
+
+export interface WebhookDeliveryProcessingResult {
+  deliveryId: string;
+  endpointId: string;
+  eventId: string;
+  tenantId: string | null;
+  attempts: number;
+  maxAttempts: number;
+  status: WebhookDeliveryProcessingStatus;
+  responseStatus: number | null;
+  lastError: string | null;
+  latencyMs: number | null;
+  nextAttemptAt?: Date;
+  failureKind?: DeliveryFailureKind;
+  validationReason?: WebhookUrlValidationReason;
+  validationUrl?: string;
+  resolvedIp?: string;
+}
+
+export interface WebhookWorkerObserver {
+  onPollStart?(context: WebhookPollContext): void;
+  onPollComplete?(result: WebhookPollResult): void;
+  onDeliveryComplete?(result: WebhookDeliveryProcessingResult): void;
+  onPollError?(error: unknown): void;
 }
 
 /**
@@ -113,6 +168,8 @@ export interface WebhookModuleOptions<TPrisma = unknown> {
   delivery?: DeliveryOptions;
   circuitBreaker?: CircuitBreakerOptions;
   polling?: PollingOptions;
+  /** Best-effort worker lifecycle and delivery metrics observer. Observer errors are logged and ignored. */
+  workerObserver?: WebhookWorkerObserver;
   /** Allow private/internal URLs for endpoints. Only enable in development/testing. Default: false */
   allowPrivateUrls?: boolean;
   /** Custom port overrides — provide these to replace default Prisma/fetch adapters. */
