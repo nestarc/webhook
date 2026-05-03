@@ -195,6 +195,43 @@ describe('Webhook E2E', () => {
     expect(attempts[0].status).toBe('SENT');
   });
 
+  it('should not update a healthy endpoint row after a successful delivery', async () => {
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+    });
+
+    const beforeRows = await prisma.$queryRaw<
+      Array<{ updated_at: Date; consecutive_failures: number; disabled_reason: string | null }>
+    >`
+      SELECT updated_at, consecutive_failures, disabled_reason
+      FROM webhook_endpoints
+      WHERE id = ${endpoint.id}::uuid
+    `;
+    expect(beforeRows).toHaveLength(1);
+    expect(beforeRows[0].consecutive_failures).toBe(0);
+    expect(beforeRows[0].disabled_reason).toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    await webhookService.send(new TestOrderEvent('ord_success_noop_reset'));
+    await deliveryWorker.poll();
+
+    const afterRows = await prisma.$queryRaw<
+      Array<{ updated_at: Date; consecutive_failures: number; disabled_reason: string | null }>
+    >`
+      SELECT updated_at, consecutive_failures, disabled_reason
+      FROM webhook_endpoints
+      WHERE id = ${endpoint.id}::uuid
+    `;
+
+    expect(receivedRequests).toHaveLength(1);
+    expect(afterRows).toHaveLength(1);
+    expect(afterRows[0].consecutive_failures).toBe(0);
+    expect(afterRows[0].disabled_reason).toBeNull();
+    expect(afterRows[0].updated_at.getTime()).toBe(beforeRows[0].updated_at.getTime());
+  });
+
   it('should not deliver to endpoints not subscribed to the event', async () => {
     await adminService.createEndpoint({
       url: `http://localhost:${mockServerPort}/webhook`,
