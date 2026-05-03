@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-03
+
 ### Added
 
 - Worker capacity controls: `polling.maxConcurrency`, `polling.drainWhileBacklogged`, `polling.maxDrainLoopsPerPoll`, and `polling.drainLoopDelayMs`.
@@ -336,7 +338,8 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
-[Unreleased]: https://github.com/nestarc/webhook/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/nestarc/webhook/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/nestarc/webhook/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nestarc/webhook/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/nestarc/webhook/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/nestarc/webhook/compare/v0.8.0...v0.9.0
