@@ -218,8 +218,12 @@ export class WebhookController {
 | `circuitBreaker.cooldownMinutes` | `60` | Minutes before attempting recovery |
 | `polling.enabled` | `true` | Set to `false` to disable the polling loop (API-only mode) |
 | `polling.interval` | `5000` | Delivery worker poll interval (ms) |
-| `polling.batchSize` | `50` | Max deliveries per poll cycle |
+| `polling.batchSize` | `50` | Max rows claimed in one database claim |
 | `polling.staleSendingMinutes` | `5` | Minutes before a stuck SENDING delivery is recovered |
+| `polling.maxConcurrency` | `polling.batchSize` | Max delivery dispatches in flight per worker process |
+| `polling.drainWhileBacklogged` | `false` | Keep claiming additional batches inside one poll while backlog and capacity remain |
+| `polling.maxDrainLoopsPerPoll` | `1`, or `10` when drain mode is enabled | Max claim loops inside one poll cycle |
+| `polling.drainLoopDelayMs` | `0` | Optional delay between drain loops |
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
 | `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts retries or receives a non-retryable response. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
@@ -228,6 +232,47 @@ export class WebhookController {
 | `onEndpointDisabled` | — | Fire-and-forget callback when the circuit breaker disables an endpoint. Fires only on active-to-inactive transition after failures meet or exceed `failureThreshold`. |
 
 The retry schedule is fixed exponential (`30s`, `5m`, `30m`, `2h`, `24h`). Use `delivery.jitter` to enable or disable random jitter.
+
+### Worker Capacity And Observer Metrics
+
+The delivery worker keeps the previous default behavior: one poll claims up to `polling.batchSize` rows and waits for those deliveries before the next interval. Set `polling.maxConcurrency` to cap in-flight dispatches below or above a claim size, and set `polling.drainWhileBacklogged: true` when a worker should continue draining queued deliveries inside the same poll cycle.
+
+```ts
+WebhookModule.forRoot({
+  prisma,
+  polling: {
+    interval: 1_000,
+    batchSize: 100,
+    maxConcurrency: 200,
+    drainWhileBacklogged: true,
+    maxDrainLoopsPerPoll: 10,
+  },
+  workerObserver: {
+    onPollComplete(result) {
+      metrics.count('webhook.worker.claimed', result.claimed);
+      metrics.count('webhook.worker.sent', result.sent);
+      metrics.count('webhook.worker.retried', result.retried);
+      metrics.gauge('webhook.worker.poll.duration_ms', result.durationMs);
+    },
+    onDeliveryComplete(result) {
+      metrics.count(`webhook.delivery.${result.status}`, 1);
+    },
+    onPollError(error) {
+      logger.error({ error }, 'webhook worker poll failed');
+    },
+  },
+});
+```
+
+Observer callbacks are best-effort. Exceptions thrown by observer callbacks are logged and do not fail delivery processing.
+
+Backlog diagnostics are available on repository implementations that support `getBacklogSummary()`:
+
+```ts
+const summary = await deliveryRepository.getBacklogSummary?.();
+```
+
+The summary includes `pendingCount`, `sendingCount`, `runnablePendingCount`, `oldestPendingAgeMs`, and `oldestRunnableAgeMs`.
 
 Webhook receiver responses are classified before scheduling another attempt:
 

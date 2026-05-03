@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Worker capacity controls: `polling.maxConcurrency`, `polling.drainWhileBacklogged`, `polling.maxDrainLoopsPerPoll`, and `polling.drainLoopDelayMs`.
+- `workerObserver` with poll lifecycle and delivery processing metrics callbacks.
+- `WebhookDeliveryRepository.getBacklogSummary()` and `DeliveryBacklogSummary` for delivery backlog diagnostics.
+- Partial PostgreSQL indexes for runnable `PENDING` deliveries and stale `SENDING` recovery scans.
+
+### Changed
+
+- `WebhookDeliveryWorker` now separates database claim size from in-flight dispatch concurrency while preserving previous defaults.
+
 ## [0.11.0] - 2026-05-02
 
 ### Added
