@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Successful delivery circuit-breaker resets now avoid rewriting already-healthy endpoint rows, reducing `webhook_endpoints` row-lock contention during high-throughput worker scale-out.
+
 ## [0.12.0] - 2026-05-03
 
 ### Added
