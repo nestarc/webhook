@@ -98,9 +98,25 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
     }
   }
 
+  private async sleep(ms: number): Promise<void> {
+    if (ms <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async waitForAvailableCapacity(): Promise<void> {
+    while (
+      !this.isShuttingDown &&
+      this.availableCapacity() <= 0 &&
+      this.activeDeliveryTasks.size > 0
+    ) {
+      await Promise.race(this.activeDeliveryTasks);
+    }
+  }
+
   private async runPollCycle(): Promise<void> {
     const startedAt = Date.now();
     const pollResult = this.createEmptyPollResult();
+    const pollTasks: Promise<WebhookDeliveryProcessingResult | null>[] = [];
 
     this.notifyObserver('onPollStart', this.createPollContext());
 
@@ -116,42 +132,39 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
         this.logger.warn(`Recovered ${recovered} stale SENDING deliveries`);
       }
 
-      let shouldContinue = true;
-      while (shouldContinue && pollResult.loops < this.maxDrainLoopsPerPoll) {
-        const capacity = this.availableCapacity();
-        if (capacity <= 0) break;
+      const maxLoops = this.drainWhileBacklogged
+        ? this.maxDrainLoopsPerPoll
+        : 1;
 
-        const claimLimit = Math.min(this.batchSize, capacity);
-        const claimed = await this.deliveryRepo.claimPendingDeliveries(
-          claimLimit,
-        );
-        pollResult.loops++;
-        pollResult.claimed += claimed.length;
+      for (let loop = 0; loop < maxLoops && !this.isShuttingDown; loop++) {
+        if (loop > 0) {
+          await this.sleep(this.drainLoopDelayMs);
+        }
+
+        await this.waitForAvailableCapacity();
+
+        const claimSize = Math.min(this.batchSize, this.availableCapacity());
+        if (claimSize <= 0) break;
+
+        const claimed = await this.deliveryRepo.claimPendingDeliveries(claimSize);
         if (claimed.length === 0) break;
+
+        pollResult.claimed += claimed.length;
+        pollResult.loops++;
 
         const deliveries = await this.deliveryRepo.enrichDeliveries(
           claimed.map((d) => d.id),
         );
         pollResult.enriched += deliveries.length;
 
-        await Promise.all(
-          deliveries.map((delivery) =>
-            this.scheduleDelivery(delivery, pollResult),
-          ),
-        );
-
-        shouldContinue =
-          this.drainWhileBacklogged && claimed.length === claimLimit;
-        if (
-          shouldContinue &&
-          this.drainLoopDelayMs > 0 &&
-          pollResult.loops < this.maxDrainLoopsPerPoll
-        ) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, this.drainLoopDelayMs),
-          );
+        for (const delivery of deliveries) {
+          pollTasks.push(this.scheduleDelivery(delivery, pollResult));
         }
+
+        if (!this.drainWhileBacklogged) break;
       }
+
+      await Promise.all(pollTasks);
     } catch (error) {
       this.notifyObserver('onPollError', error);
       this.logError('Poll cycle failed', error);

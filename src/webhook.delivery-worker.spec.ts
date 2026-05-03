@@ -248,6 +248,137 @@ describe('WebhookDeliveryWorker', () => {
       expect(dispatcher.dispatch).toHaveBeenCalledTimes(3);
     });
 
+    it('keeps drainWhileBacklogged disabled by default and claims one batch', async () => {
+      const d1 = makeDelivery({ id: 'd-one-batch-1' });
+      const d2 = makeDelivery({ id: 'd-one-batch-2' });
+
+      deliveryRepo.claimPendingDeliveries
+        .mockResolvedValueOnce([d1, d2])
+        .mockResolvedValueOnce([makeDelivery({ id: 'd-should-not-claim' })]);
+      deliveryRepo.enrichDeliveries.mockResolvedValueOnce([d1, d2]);
+      dispatcher.dispatch.mockResolvedValue(makeSuccessResult());
+
+      await worker.poll();
+
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenCalledTimes(1);
+      expect(deliveryRepo.enrichDeliveries).toHaveBeenCalledWith([
+        'd-one-batch-1',
+        'd-one-batch-2',
+      ]);
+    });
+
+    it('drains multiple batches while backlog remains when enabled', async () => {
+      const observer = { onPollComplete: jest.fn() };
+      const workerWithDrain = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: {
+            batchSize: 2,
+            maxConcurrency: 4,
+            drainWhileBacklogged: true,
+            maxDrainLoopsPerPoll: 3,
+          },
+          workerObserver: observer,
+        },
+      );
+      const d1 = makeDelivery({ id: 'd-drain-1' });
+      const d2 = makeDelivery({ id: 'd-drain-2' });
+      const d3 = makeDelivery({ id: 'd-drain-3' });
+      const d4 = makeDelivery({ id: 'd-drain-4' });
+
+      deliveryRepo.claimPendingDeliveries
+        .mockResolvedValueOnce([d1, d2])
+        .mockResolvedValueOnce([d3, d4])
+        .mockResolvedValueOnce([]);
+      deliveryRepo.enrichDeliveries
+        .mockResolvedValueOnce([d1, d2])
+        .mockResolvedValueOnce([d3, d4]);
+      dispatcher.dispatch.mockResolvedValue(makeSuccessResult());
+
+      await workerWithDrain.poll();
+
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenNthCalledWith(1, 2);
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenNthCalledWith(2, 2);
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenNthCalledWith(3, 2);
+      expect(dispatcher.dispatch).toHaveBeenCalledTimes(4);
+      expect(observer.onPollComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          claimed: 4,
+          enriched: 4,
+          sent: 4,
+          loops: 2,
+        }),
+      );
+    });
+
+    it('stops drain mode at maxDrainLoopsPerPoll', async () => {
+      const workerWithDrainLimit = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: {
+            batchSize: 1,
+            maxConcurrency: 2,
+            drainWhileBacklogged: true,
+            maxDrainLoopsPerPoll: 2,
+          },
+        },
+      );
+      const d1 = makeDelivery({ id: 'd-loop-limit-1' });
+      const d2 = makeDelivery({ id: 'd-loop-limit-2' });
+      const d3 = makeDelivery({ id: 'd-loop-limit-3' });
+
+      deliveryRepo.claimPendingDeliveries
+        .mockResolvedValueOnce([d1])
+        .mockResolvedValueOnce([d2])
+        .mockResolvedValueOnce([d3]);
+      deliveryRepo.enrichDeliveries
+        .mockResolvedValueOnce([d1])
+        .mockResolvedValueOnce([d2]);
+      dispatcher.dispatch.mockResolvedValue(makeSuccessResult());
+
+      await workerWithDrainLimit.poll();
+
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenCalledTimes(2);
+      expect(dispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('recovers stale SENDING deliveries only once during a drain poll', async () => {
+      const workerWithDrain = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: {
+            batchSize: 1,
+            maxConcurrency: 2,
+            drainWhileBacklogged: true,
+            maxDrainLoopsPerPoll: 2,
+          },
+        },
+      );
+      const d1 = makeDelivery({ id: 'd-stale-once-1' });
+      const d2 = makeDelivery({ id: 'd-stale-once-2' });
+
+      deliveryRepo.claimPendingDeliveries
+        .mockResolvedValueOnce([d1])
+        .mockResolvedValueOnce([d2]);
+      deliveryRepo.enrichDeliveries
+        .mockResolvedValueOnce([d1])
+        .mockResolvedValueOnce([d2]);
+      dispatcher.dispatch.mockResolvedValue(makeSuccessResult());
+
+      await workerWithDrain.poll();
+
+      expect(deliveryRepo.recoverStaleSending).toHaveBeenCalledTimes(1);
+    });
+
     it('reports poll and delivery metrics to the worker observer', async () => {
       const observer = {
         onPollStart: jest.fn(),
