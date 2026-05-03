@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-03
+
 ### Fixed
 
 - Successful delivery circuit-breaker resets now avoid rewriting already-healthy endpoint rows, reducing `webhook_endpoints` row-lock contention during high-throughput worker scale-out.
@@ -342,7 +344,8 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
-[Unreleased]: https://github.com/nestarc/webhook/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/nestarc/webhook/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/nestarc/webhook/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/nestarc/webhook/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nestarc/webhook/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/nestarc/webhook/compare/v0.9.0...v0.10.0
