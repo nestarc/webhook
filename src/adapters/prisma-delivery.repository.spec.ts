@@ -116,6 +116,7 @@ describe('PrismaDeliveryRepository', () => {
       const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join(' ');
       expect(sql).toContain('attempts = attempts + 1');
       expect(sql).toContain('attempts + 1 >= max_attempts');
+      expect(sql).toContain('claimed_at < NOW() -');
       expect(sql).toContain('webhook_delivery_attempts');
     });
   });
@@ -182,6 +183,30 @@ describe('PrismaDeliveryRepository', () => {
       expect(sql).toContain('AS "oldestRunnableAgeMs"');
       expect(sql).toContain("status = 'PENDING'");
       expect(sql).toContain("status = 'SENDING'");
+      expect(sql).not.toContain('::int');
+    });
+
+    it('normalizes wide aggregate values to JavaScript numbers', async () => {
+      const prisma = {
+        $queryRaw: jest.fn().mockResolvedValue([
+          {
+            pendingCount: BigInt(3),
+            sendingCount: '2',
+            runnablePendingCount: BigInt(1),
+            oldestPendingAgeMs: '2147483648',
+            oldestRunnableAgeMs: BigInt(3_000_000_000),
+          },
+        ]),
+      };
+      const repo = new PrismaDeliveryRepository(prisma);
+
+      await expect(repo.getBacklogSummary()).resolves.toEqual({
+        pendingCount: 3,
+        sendingCount: 2,
+        runnablePendingCount: 1,
+        oldestPendingAgeMs: 2_147_483_648,
+        oldestRunnableAgeMs: 3_000_000_000,
+      });
     });
   });
 

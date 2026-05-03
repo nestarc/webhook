@@ -22,6 +22,14 @@ type AttemptLogClient = {
   ) => Promise<T>;
 };
 
+type RawDeliveryBacklogSummary = {
+  pendingCount: unknown;
+  sendingCount: unknown;
+  runnablePendingCount: unknown;
+  oldestPendingAgeMs: unknown | null;
+  oldestRunnableAgeMs: unknown | null;
+};
+
 const STALE_SENDING_RECOVERY_ERROR =
   'Recovered stale SENDING delivery after worker lease expired';
 
@@ -44,6 +52,16 @@ function truncateAttemptResponseBody(body: string | null | undefined) {
     responseBody: body.slice(0, ATTEMPT_RESPONSE_BODY_MAX_LENGTH),
     responseBodyTruncated: true,
   };
+}
+
+function normalizeBacklogNumber(value: unknown, field: string): number {
+  const normalized = Number(value);
+
+  if (!Number.isFinite(normalized)) {
+    throw new Error(`Invalid backlog summary ${field}: ${String(value)}`);
+  }
+
+  return normalized;
 }
 
 @Injectable()
@@ -240,7 +258,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
             last_error = ${STALE_SENDING_RECOVERY_ERROR}
         WHERE status = 'SENDING'
           AND claimed_at IS NOT NULL
-          AND claimed_at + ${interval}::interval < NOW()
+          AND claimed_at < NOW() - ${interval}::interval
         RETURNING id, attempts, status
       ),
       attempt_log AS (
@@ -274,15 +292,15 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
   }
 
   async getBacklogSummary(): Promise<DeliveryBacklogSummary> {
-    const rows = await this.prisma.$queryRaw<DeliveryBacklogSummary[]>`
+    const rows = await this.prisma.$queryRaw<RawDeliveryBacklogSummary[]>`
       WITH backlog AS (
         SELECT
-          COUNT(*) FILTER (WHERE status = 'PENDING')::int AS "pendingCount",
-          COUNT(*) FILTER (WHERE status = 'SENDING')::int AS "sendingCount",
+          COUNT(*) FILTER (WHERE status = 'PENDING') AS "pendingCount",
+          COUNT(*) FILTER (WHERE status = 'SENDING') AS "sendingCount",
           COUNT(*) FILTER (
             WHERE status = 'PENDING'
               AND next_attempt_at <= NOW()
-          )::int AS "runnablePendingCount",
+          ) AS "runnablePendingCount",
           MIN(next_attempt_at) FILTER (
             WHERE status = 'PENDING'
           ) AS "oldestPendingAt",
@@ -300,24 +318,48 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
           WHEN "oldestPendingAt" IS NULL THEN NULL
           ELSE GREATEST(
             0,
-            FLOOR(EXTRACT(EPOCH FROM (NOW() - "oldestPendingAt")) * 1000)::int
+            FLOOR(EXTRACT(EPOCH FROM (NOW() - "oldestPendingAt")) * 1000)::bigint
           )
         END AS "oldestPendingAgeMs",
         CASE
           WHEN "oldestRunnableAt" IS NULL THEN NULL
           ELSE GREATEST(
             0,
-            FLOOR(EXTRACT(EPOCH FROM (NOW() - "oldestRunnableAt")) * 1000)::int
+            FLOOR(EXTRACT(EPOCH FROM (NOW() - "oldestRunnableAt")) * 1000)::bigint
           )
         END AS "oldestRunnableAgeMs"
       FROM backlog`;
 
-    return rows[0] ?? {
-      pendingCount: 0,
-      sendingCount: 0,
-      runnablePendingCount: 0,
-      oldestPendingAgeMs: null,
-      oldestRunnableAgeMs: null,
+    const row = rows[0];
+
+    if (!row) {
+      return {
+        pendingCount: 0,
+        sendingCount: 0,
+        runnablePendingCount: 0,
+        oldestPendingAgeMs: null,
+        oldestRunnableAgeMs: null,
+      };
+    }
+
+    return {
+      pendingCount: normalizeBacklogNumber(row.pendingCount, 'pendingCount'),
+      sendingCount: normalizeBacklogNumber(row.sendingCount, 'sendingCount'),
+      runnablePendingCount: normalizeBacklogNumber(
+        row.runnablePendingCount,
+        'runnablePendingCount',
+      ),
+      oldestPendingAgeMs:
+        row.oldestPendingAgeMs == null
+          ? null
+          : normalizeBacklogNumber(row.oldestPendingAgeMs, 'oldestPendingAgeMs'),
+      oldestRunnableAgeMs:
+        row.oldestRunnableAgeMs == null
+          ? null
+          : normalizeBacklogNumber(
+              row.oldestRunnableAgeMs,
+              'oldestRunnableAgeMs',
+            ),
     };
   }
 

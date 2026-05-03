@@ -358,9 +358,9 @@ describe('Webhook E2E', () => {
 
     const summary = await deliveryRepo.getBacklogSummary!();
 
-    expect(summary.pendingCount).toBeGreaterThanOrEqual(2);
-    expect(summary.sendingCount).toBeGreaterThanOrEqual(1);
-    expect(summary.runnablePendingCount).toBeGreaterThanOrEqual(1);
+    expect(summary.pendingCount).toBe(2);
+    expect(summary.sendingCount).toBe(1);
+    expect(summary.runnablePendingCount).toBe(1);
     expect(typeof summary.oldestPendingAgeMs).toBe('number');
     expect(typeof summary.oldestRunnableAgeMs).toBe('number');
   });
