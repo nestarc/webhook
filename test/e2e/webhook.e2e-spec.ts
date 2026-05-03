@@ -3,6 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
+import {
+  WEBHOOK_DELIVERY_REPOSITORY,
+  WebhookDeliveryRepository,
+} from '../../src';
 import { WebhookModule } from '../../src/webhook.module';
 import { WebhookService } from '../../src/webhook.service';
 import { WebhookAdminService } from '../../src/webhook.admin.service';
@@ -26,6 +30,7 @@ describe('Webhook E2E', () => {
   let webhookService: WebhookService;
   let adminService: WebhookAdminService;
   let deliveryWorker: WebhookDeliveryWorker;
+  let deliveryRepo: WebhookDeliveryRepository;
   let mockServer: http.Server;
   let mockServerPort: number;
   let receivedRequests: Array<{
@@ -108,6 +113,7 @@ describe('Webhook E2E', () => {
     webhookService = module.get(WebhookService);
     adminService = module.get(WebhookAdminService);
     deliveryWorker = module.get(WebhookDeliveryWorker);
+    deliveryRepo = module.get(WEBHOOK_DELIVERY_REPOSITORY);
 
     await module.init();
   });
@@ -322,6 +328,41 @@ describe('Webhook E2E', () => {
     // Check endpoint status
     const ep = await adminService.getEndpoint(endpoint.id);
     expect(ep!.active).toBe(false);
+  });
+
+  it('reports delivery backlog summary counts and runnable ages', async () => {
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+    });
+
+    for (let i = 0; i < 3; i++) {
+      await webhookService.send(new TestOrderEvent(`ord_backlog_${i}`));
+    }
+
+    const deliveries = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT id
+      FROM webhook_deliveries
+      WHERE endpoint_id = ${endpoint.id}::uuid
+      ORDER BY id ASC`;
+    expect(deliveries).toHaveLength(3);
+
+    await prisma.$executeRaw`
+      UPDATE webhook_deliveries
+      SET next_attempt_at = NOW() + INTERVAL '10 minutes'
+      WHERE id = ${deliveries[0].id}::uuid`;
+    await prisma.$executeRaw`
+      UPDATE webhook_deliveries
+      SET status = 'SENDING', claimed_at = NOW()
+      WHERE id = ${deliveries[1].id}::uuid`;
+
+    const summary = await deliveryRepo.getBacklogSummary!();
+
+    expect(summary.pendingCount).toBeGreaterThanOrEqual(2);
+    expect(summary.sendingCount).toBeGreaterThanOrEqual(1);
+    expect(summary.runnablePendingCount).toBeGreaterThanOrEqual(1);
+    expect(typeof summary.oldestPendingAgeMs).toBe('number');
+    expect(typeof summary.oldestRunnableAgeMs).toBe('number');
   });
 
   it('should support manual retry of failed deliveries', async () => {

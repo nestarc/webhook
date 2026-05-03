@@ -1,7 +1,31 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { PrismaDeliveryRepository } from './prisma-delivery.repository';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
 
 describe('PrismaDeliveryRepository', () => {
+  describe('schema indexes', () => {
+    it('declares partial indexes for runnable pending and sending scans', () => {
+      const createTablesSql = readFileSync(
+        join(__dirname, '..', 'sql', 'create-webhook-tables.sql'),
+        'utf8',
+      );
+      const migrationSql = readFileSync(
+        join(__dirname, '..', 'sql', 'migrations', 'v0.12.0.sql'),
+        'utf8',
+      );
+
+      for (const sql of [createTablesSql, migrationSql]) {
+        expect(sql).toContain('webhook_deliveries_runnable_pending_idx');
+        expect(sql).toContain('ON webhook_deliveries (next_attempt_at, id)');
+        expect(sql).toContain("WHERE status = 'PENDING'");
+        expect(sql).toContain('webhook_deliveries_sending_claimed_idx');
+        expect(sql).toContain('ON webhook_deliveries (claimed_at, id)');
+        expect(sql).toContain("WHERE status = 'SENDING'");
+      }
+    });
+  });
+
   describe('attempt logging', () => {
     it('writes delivery state and attempt log in the same transaction', async () => {
       const tx = {
@@ -109,6 +133,55 @@ describe('PrismaDeliveryRepository', () => {
       expect(sql).toContain('event_id AS "eventId"');
       expect(sql).toContain('endpoint_id AS "endpointId"');
       expect(sql).toContain('max_attempts AS "maxAttempts"');
+    });
+  });
+
+  describe('getBacklogSummary', () => {
+    it('returns default zero counts when the aggregate query returns no rows', async () => {
+      const prisma = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+      };
+      const repo = new PrismaDeliveryRepository(prisma);
+
+      await expect(repo.getBacklogSummary()).resolves.toEqual({
+        pendingCount: 0,
+        sendingCount: 0,
+        runnablePendingCount: 0,
+        oldestPendingAgeMs: null,
+        oldestRunnableAgeMs: null,
+      });
+    });
+
+    it('uses backlog diagnostic aliases expected by the public port', async () => {
+      const prisma = {
+        $queryRaw: jest.fn().mockResolvedValue([
+          {
+            pendingCount: 3,
+            sendingCount: 2,
+            runnablePendingCount: 1,
+            oldestPendingAgeMs: 12_000,
+            oldestRunnableAgeMs: 4_000,
+          },
+        ]),
+      };
+      const repo = new PrismaDeliveryRepository(prisma);
+
+      await expect(repo.getBacklogSummary()).resolves.toEqual({
+        pendingCount: 3,
+        sendingCount: 2,
+        runnablePendingCount: 1,
+        oldestPendingAgeMs: 12_000,
+        oldestRunnableAgeMs: 4_000,
+      });
+
+      const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join(' ');
+      expect(sql).toContain('AS "pendingCount"');
+      expect(sql).toContain('AS "sendingCount"');
+      expect(sql).toContain('AS "runnablePendingCount"');
+      expect(sql).toContain('AS "oldestPendingAgeMs"');
+      expect(sql).toContain('AS "oldestRunnableAgeMs"');
+      expect(sql).toContain("status = 'PENDING'");
+      expect(sql).toContain("status = 'SENDING'");
     });
   });
 

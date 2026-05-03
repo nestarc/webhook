@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   ClaimedDelivery,
+  DeliveryBacklogSummary,
   PendingDelivery,
   WebhookDeliveryRepository,
   WebhookTransaction,
@@ -270,6 +271,54 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       FROM recovered
       LEFT JOIN attempt_log ON attempt_log.delivery_id = recovered.id`;
     return recovered.length;
+  }
+
+  async getBacklogSummary(): Promise<DeliveryBacklogSummary> {
+    const rows = await this.prisma.$queryRaw<DeliveryBacklogSummary[]>`
+      WITH backlog AS (
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'PENDING')::int AS "pendingCount",
+          COUNT(*) FILTER (WHERE status = 'SENDING')::int AS "sendingCount",
+          COUNT(*) FILTER (
+            WHERE status = 'PENDING'
+              AND next_attempt_at <= NOW()
+          )::int AS "runnablePendingCount",
+          MIN(next_attempt_at) FILTER (
+            WHERE status = 'PENDING'
+          ) AS "oldestPendingAt",
+          MIN(next_attempt_at) FILTER (
+            WHERE status = 'PENDING'
+              AND next_attempt_at <= NOW()
+          ) AS "oldestRunnableAt"
+        FROM webhook_deliveries
+      )
+      SELECT
+        "pendingCount",
+        "sendingCount",
+        "runnablePendingCount",
+        CASE
+          WHEN "oldestPendingAt" IS NULL THEN NULL
+          ELSE GREATEST(
+            0,
+            FLOOR(EXTRACT(EPOCH FROM (NOW() - "oldestPendingAt")) * 1000)::int
+          )
+        END AS "oldestPendingAgeMs",
+        CASE
+          WHEN "oldestRunnableAt" IS NULL THEN NULL
+          ELSE GREATEST(
+            0,
+            FLOOR(EXTRACT(EPOCH FROM (NOW() - "oldestRunnableAt")) * 1000)::int
+          )
+        END AS "oldestRunnableAgeMs"
+      FROM backlog`;
+
+    return rows[0] ?? {
+      pendingCount: 0,
+      sendingCount: 0,
+      runnablePendingCount: 0,
+      oldestPendingAgeMs: null,
+      oldestRunnableAgeMs: null,
+    };
   }
 
   async getDeliveryLogs(

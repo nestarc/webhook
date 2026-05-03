@@ -77,6 +77,12 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status_next
   ON webhook_deliveries (status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS webhook_deliveries_runnable_pending_idx
+  ON webhook_deliveries (next_attempt_at, id)
+  WHERE status = 'PENDING';
+CREATE INDEX IF NOT EXISTS webhook_deliveries_sending_claimed_idx
+  ON webhook_deliveries (claimed_at, id)
+  WHERE status = 'SENDING';
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_endpoint_status
   ON webhook_deliveries (endpoint_id, status);
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_event
