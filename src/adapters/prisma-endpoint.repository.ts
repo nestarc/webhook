@@ -220,7 +220,11 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
             ELSE disabled_reason
           END,
           updated_at = NOW()
-      WHERE id = ${endpointId}::uuid`;
+      WHERE id = ${endpointId}::uuid
+        AND (
+          consecutive_failures <> 0
+          OR disabled_reason = ${ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED}
+        )`;
   }
 
   async incrementFailures(endpointId: string): Promise<number> {

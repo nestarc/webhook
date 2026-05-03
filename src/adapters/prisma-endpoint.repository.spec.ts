@@ -21,6 +21,25 @@ describe('PrismaEndpointRepository', () => {
       expect(sql).not.toContain('active = true');
       expect(values).toContain(ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED);
     });
+
+    it('skips healthy endpoint success resets by guarding the UPDATE predicate', async () => {
+      const prisma = {
+        $executeRaw: jest.fn().mockResolvedValue(0),
+      };
+      const repo = new PrismaEndpointRepository(prisma);
+
+      await repo.resetFailures('endpoint-1');
+
+      const sql = (prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray)
+        .join(' ')
+        .replace(/\s+/g, ' ');
+      const values = prisma.$executeRaw.mock.calls[0].slice(1);
+
+      expect(sql).toContain('WHERE id =');
+      expect(sql).toContain('consecutive_failures <> 0');
+      expect(sql).toContain('OR disabled_reason =');
+      expect(values).toContain(ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED);
+    });
   });
 
   describe('disableEndpoint', () => {
