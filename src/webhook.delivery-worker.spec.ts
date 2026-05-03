@@ -379,6 +379,55 @@ describe('WebhookDeliveryWorker', () => {
       expect(deliveryRepo.recoverStaleSending).toHaveBeenCalledTimes(1);
     });
 
+    it('does not claim another drain batch when shutdown starts while waiting for capacity', async () => {
+      const workerWithDrain = new WebhookDeliveryWorker(
+        deliveryRepo as unknown as WebhookDeliveryRepository,
+        dispatcher as unknown as WebhookDispatcher,
+        retryPolicy as unknown as WebhookRetryPolicy,
+        circuitBreaker,
+        {
+          polling: {
+            batchSize: 1,
+            maxConcurrency: 1,
+            drainWhileBacklogged: true,
+            maxDrainLoopsPerPoll: 2,
+          },
+        },
+      );
+      const d1 = makeDelivery({ id: 'd-shutdown-wait-1' });
+      const d2 = makeDelivery({ id: 'd-shutdown-wait-2' });
+      let finishFirstDispatch!: (result: DeliveryResult) => void;
+      const firstDispatch = new Promise<DeliveryResult>((resolve) => {
+        finishFirstDispatch = resolve;
+      });
+
+      deliveryRepo.claimPendingDeliveries
+        .mockResolvedValueOnce([d1])
+        .mockResolvedValueOnce([d2]);
+      deliveryRepo.enrichDeliveries
+        .mockResolvedValueOnce([d1])
+        .mockResolvedValueOnce([d2]);
+      dispatcher.dispatch
+        .mockReturnValueOnce(firstDispatch)
+        .mockResolvedValueOnce(makeSuccessResult());
+
+      const pollPromise = workerWithDrain.poll();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenCalledTimes(1);
+      expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+
+      const shutdownPromise = workerWithDrain.onModuleDestroy();
+      finishFirstDispatch(makeSuccessResult());
+      await pollPromise;
+      await shutdownPromise;
+
+      expect(deliveryRepo.claimPendingDeliveries).toHaveBeenCalledTimes(1);
+      expect(deliveryRepo.enrichDeliveries).toHaveBeenCalledWith([
+        'd-shutdown-wait-1',
+      ]);
+      expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+    });
+
     it('reports poll and delivery metrics to the worker observer', async () => {
       const observer = {
         onPollStart: jest.fn(),

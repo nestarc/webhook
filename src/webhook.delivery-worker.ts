@@ -139,9 +139,11 @@ export class WebhookDeliveryWorker implements OnModuleDestroy {
       for (let loop = 0; loop < maxLoops && !this.isShuttingDown; loop++) {
         if (loop > 0) {
           await this.sleep(this.drainLoopDelayMs);
+          if (this.isShuttingDown) break;
         }
 
         await this.waitForAvailableCapacity();
+        if (this.isShuttingDown) break;
 
         const claimSize = Math.min(this.batchSize, this.availableCapacity());
         if (claimSize <= 0) break;
