@@ -6,17 +6,22 @@ name: Release
 # Flow:
 #   1. verify job reads package.json version and confirms it matches the tag
 #      or the manually supplied expected version.
-#   2. build-and-test runs the full prepublishOnly chain as a final safety net.
-#   3. publish runs `npm publish --provenance --access public` and creates a
-#      GitHub Release with the CHANGELOG excerpt.
+#   2. build-and-test runs the full prepublishOnly chain as a final safety net
+#      on the same Node major used for publishing.
+#   3. publish uses npm Trusted Publishing (OIDC) from the `npm` environment,
+#      runs `npm publish --access public`, and creates a GitHub Release with
+#      the CHANGELOG excerpt.
 #
-# Required secrets:
-#   - NPM_TOKEN — an Automation token scoped to publish rights on @nestarc/*.
-#                 Create at https://www.npmjs.com/settings/<user>/tokens and add
-#                 under repo Settings > Secrets and variables > Actions.
+# npm Trusted Publisher settings:
+#   - Publisher: GitHub Actions
+#   - Organization/user: nestarc
+#   - Repository: webhook
+#   - Workflow filename: release.yml
+#   - Environment name: npm
+#   - Allowed action: npm publish
 #
 # Permissions:
-#   - id-token: write is required for `--provenance` OIDC signing.
+#   - id-token: write is required for npm Trusted Publishing OIDC.
 #   - contents: write is required to create the GitHub Release.
 #
 # Security notes:
@@ -63,8 +68,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: npm
+          node-version: '24'
+          package-manager-cache: false
 
       - name: Read package version
         id: read
@@ -98,6 +103,14 @@ jobs:
           fi
           echo "Expected version $EXPECTED_VERSION matches package.json $PKG_VERSION"
 
+      - name: Ensure manual release runs from main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        env:
+          GIT_REF: ${{ github.ref }}
+        run: |
+          echo "::error::Manual releases must run from main, got $GIT_REF"
+          exit 1
+
   build-and-test:
     name: Full prepublishOnly chain
     needs: verify
@@ -128,9 +141,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: npm
+          node-version: '24'
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
@@ -163,6 +176,7 @@ jobs:
     name: Publish to npm
     needs: [verify, build-and-test]
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: write
       id-token: write
@@ -173,9 +187,9 @@ jobs:
       - name: Setup Node with npm registry
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: npm
+          node-version: '24'
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
@@ -185,15 +199,11 @@ jobs:
 
       - name: Publish (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public --dry-run
+        run: npm publish --access public --dry-run
 
       - name: Publish
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: npm publish --access public
 
       - name: Extract CHANGELOG entry for this version
         if: github.event_name == 'push'
