@@ -3,7 +3,14 @@ import {
   DeliveryLogFilters,
   DeliveryRecord,
   DeliveryResult,
+  ReplayEventOptions,
+  ReplayEventResult,
+  RetryDeliveryOptions,
+  RetryFailedDeliveriesFilters,
+  RetryFailedDeliveriesResult,
+  WebhookRetentionPurgeResult,
 } from '../interfaces/webhook-delivery.interface';
+import { WebhookRetentionOptions } from '../interfaces/webhook-options.interface';
 
 declare const webhookTransactionBrand: unique symbol;
 
@@ -68,6 +75,18 @@ export interface WebhookDeliveryRepository {
   getDeliveryLogs(endpointId: string, filters?: DeliveryLogFilters): Promise<DeliveryRecord[]>;
   /** @returns attempts sorted by attemptNumber ASC. */
   getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]>;
-  retryDelivery(deliveryId: string): Promise<boolean>;
+  retryDelivery(deliveryId: string, options?: RetryDeliveryOptions): Promise<boolean>;
+  retryFailedDeliveries?(
+    filters: RetryFailedDeliveriesFilters,
+    options?: RetryDeliveryOptions,
+  ): Promise<RetryFailedDeliveriesResult>;
+  replayEvent?(
+    eventId: string,
+    options?: ReplayEventOptions,
+  ): Promise<ReplayEventResult>;
+  purgeExpiredData?(
+    options: WebhookRetentionOptions,
+    now?: Date,
+  ): Promise<WebhookRetentionPurgeResult>;
   createTestDelivery(eventId: string, endpointId: string): Promise<void>;
 }

@@ -5,6 +5,7 @@ import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
 import {
   DeliveryAttemptRecord,
   DeliveryRecord,
+  RetryFailedDeliveriesResult,
 } from './interfaces/webhook-delivery.interface';
 
 function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
@@ -73,10 +74,16 @@ function createMockDeliveryAdmin() {
     getDeliveryLogs: jest.fn(),
     getDeliveryAttempts: jest.fn(),
     retryDelivery: jest.fn(),
+    retryFailedDeliveries: jest.fn(),
+    replayEvent: jest.fn(),
   } as jest.Mocked<
     Pick<
       WebhookDeliveryAdminService,
-      'getDeliveryLogs' | 'getDeliveryAttempts' | 'retryDelivery'
+      | 'getDeliveryLogs'
+      | 'getDeliveryAttempts'
+      | 'retryDelivery'
+      | 'retryFailedDeliveries'
+      | 'replayEvent'
     >
   >;
 }
@@ -256,10 +263,14 @@ describe('WebhookAdminService', () => {
     it('should delegate to deliveryAdmin.retryDelivery', async () => {
       deliveryAdmin.retryDelivery.mockResolvedValueOnce(true);
 
-      const result = await admin.retryDelivery('del-1');
+      const result = await admin.retryDelivery('del-1', {
+        reason: 'customer requested replay',
+      });
 
       expect(result).toBe(true);
-      expect(deliveryAdmin.retryDelivery).toHaveBeenCalledWith('del-1');
+      expect(deliveryAdmin.retryDelivery).toHaveBeenCalledWith('del-1', {
+        reason: 'customer requested replay',
+      });
     });
 
     it('should return false for non-FAILED delivery', async () => {
@@ -268,6 +279,48 @@ describe('WebhookAdminService', () => {
       const result = await admin.retryDelivery('del-2');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('retryFailedDeliveries', () => {
+    it('should delegate to deliveryAdmin.retryFailedDeliveries', async () => {
+      const retryResult: RetryFailedDeliveriesResult = {
+        matched: 2,
+        retried: 2,
+        skipped: 0,
+      };
+      deliveryAdmin.retryFailedDeliveries.mockResolvedValueOnce(retryResult);
+
+      const result = await admin.retryFailedDeliveries(
+        { endpointId: 'ep-1', limit: 10 },
+        { reason: 'incident recovery' },
+      );
+
+      expect(result).toBe(retryResult);
+      expect(deliveryAdmin.retryFailedDeliveries).toHaveBeenCalledWith(
+        { endpointId: 'ep-1', limit: 10 },
+        { reason: 'incident recovery' },
+      );
+    });
+  });
+
+  describe('replayEvent', () => {
+    it('should delegate to deliveryAdmin.replayEvent', async () => {
+      const replayResult = {
+        eventId: 'evt-1',
+        deliveriesCreated: 1,
+        endpointIds: ['ep-1'],
+      };
+      deliveryAdmin.replayEvent.mockResolvedValueOnce(replayResult);
+
+      const result = await admin.replayEvent('evt-1', {
+        reason: 'customer support replay',
+      });
+
+      expect(result).toBe(replayResult);
+      expect(deliveryAdmin.replayEvent).toHaveBeenCalledWith('evt-1', {
+        reason: 'customer support replay',
+      });
     });
   });
 

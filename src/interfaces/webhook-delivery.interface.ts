@@ -58,3 +58,35 @@ export interface DeliveryLogFilters {
   limit?: number;
   offset?: number;
 }
+
+export interface RetryDeliveryOptions {
+  reason?: string;
+}
+
+export interface RetryFailedDeliveriesFilters extends DeliveryLogFilters {
+  endpointId?: string;
+}
+
+export interface RetryFailedDeliveriesResult {
+  matched: number;
+  retried: number;
+  skipped: number;
+}
+
+export interface ReplayEventOptions {
+  endpointIds?: string[];
+  tenantId?: string;
+  reason?: string;
+}
+
+export interface ReplayEventResult {
+  eventId: string;
+  deliveriesCreated: number;
+  endpointIds: string[];
+}
+
+export interface WebhookRetentionPurgeResult {
+  eventsPurged: number;
+  deliveriesPurged: number;
+  attemptsPurged: number;
+}

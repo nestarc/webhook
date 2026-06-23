@@ -12,6 +12,11 @@ import {
   DeliveryAttemptRecord,
   DeliveryLogFilters,
   DeliveryRecord,
+  ReplayEventOptions,
+  ReplayEventResult,
+  RetryDeliveryOptions,
+  RetryFailedDeliveriesFilters,
+  RetryFailedDeliveriesResult,
 } from './interfaces/webhook-delivery.interface';
 
 /**
@@ -66,8 +71,25 @@ export class WebhookAdminService {
     return this.deliveries.getDeliveryAttempts(deliveryId);
   }
 
-  async retryDelivery(deliveryId: string): Promise<boolean> {
-    return this.deliveries.retryDelivery(deliveryId);
+  async retryDelivery(
+    deliveryId: string,
+    options?: RetryDeliveryOptions,
+  ): Promise<boolean> {
+    return this.deliveries.retryDelivery(deliveryId, options);
+  }
+
+  async retryFailedDeliveries(
+    filters: RetryFailedDeliveriesFilters,
+    options?: RetryDeliveryOptions,
+  ): Promise<RetryFailedDeliveriesResult> {
+    return this.deliveries.retryFailedDeliveries(filters, options);
+  }
+
+  async replayEvent(
+    eventId: string,
+    options?: ReplayEventOptions,
+  ): Promise<ReplayEventResult> {
+    return this.deliveries.replayEvent(eventId, options);
   }
 
   async sendTestEvent(endpointId: string): Promise<string | null> {

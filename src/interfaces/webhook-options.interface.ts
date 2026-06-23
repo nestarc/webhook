@@ -20,6 +20,35 @@ export interface DeliveryOptions {
   jitter?: boolean;
 }
 
+export interface WebhookPublishOptions {
+  /** Application-provided key used to deduplicate publish attempts. */
+  idempotencyKey?: string;
+  /** Optional caller correlation ID stored with the event for diagnostics. */
+  correlationId?: string;
+}
+
+export interface WebhookRetentionOptions {
+  eventPayloadRetentionDays?: number;
+  deliveryResponseBodyRetentionDays?: number;
+  attemptResponseBodyRetentionDays?: number;
+}
+
+export interface WebhookRedactionOptions {
+  sanitizePayload?: (
+    payload: Record<string, unknown>,
+    context: { eventType: string; tenantId: string | null },
+  ) => Record<string, unknown>;
+  sanitizeResponseBody?: (
+    body: string,
+    context: {
+      deliveryId: string;
+      endpointId: string | null;
+      eventId: string | null;
+      statusCode: number | null;
+    },
+  ) => string | null;
+}
+
 export interface CircuitBreakerOptions {
   failureThreshold?: number;
   degradedThreshold?: number;
@@ -179,6 +208,10 @@ export interface WebhookModuleOptions<TPrisma = unknown> {
   httpClient?: WebhookHttpClient;
   /** Custom secret vault for encrypting/decrypting endpoint signing secrets at rest. Default: PlaintextSecretVault (no-op). */
   secretVault?: WebhookSecretVault;
+  /** Optional retention purge policy. Disabled when omitted. */
+  retention?: WebhookRetentionOptions;
+  /** Optional minimization hooks applied before webhook data is persisted. */
+  redaction?: WebhookRedactionOptions;
 
   /** Called when a delivery exhausts retry attempts or receives a non-retryable response. Fire-and-forget — errors are logged, not propagated. */
   onDeliveryFailed?: (context: DeliveryFailedContext) => void | Promise<void>;

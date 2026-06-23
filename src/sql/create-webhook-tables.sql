@@ -33,15 +33,21 @@ CREATE INDEX IF NOT EXISTS idx_webhook_endpoints_active_events
 ---
 
 CREATE TABLE IF NOT EXISTS webhook_events (
-  id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-  event_type  VARCHAR(255) NOT NULL,
-  payload     JSONB        NOT NULL,
-  tenant_id   VARCHAR(255),
-  created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  id                 UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_type         VARCHAR(255) NOT NULL,
+  payload            JSONB        NOT NULL,
+  tenant_id          VARCHAR(255),
+  idempotency_key    VARCHAR(255),
+  correlation_id     VARCHAR(255),
+  payload_purged_at  TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_webhook_events_type_created
   ON webhook_events (event_type, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS webhook_events_idempotency_key_idx
+  ON webhook_events (COALESCE(tenant_id, ''), event_type, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
 
 ---
 

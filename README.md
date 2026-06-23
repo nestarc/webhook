@@ -13,6 +13,7 @@ Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circui
 ## Features
 
 - **Fan-out delivery** — one event to many endpoints
+- **Idempotent publish** — deduplicate producer retries with application keys
 - **HMAC-SHA256 signing** — Standard Webhooks compatible headers
 - **Secret rotation overlap** — sign with both old and new secrets during rotation windows
 - **Exponential backoff** — 30s, 5m, 30m, 2h, 24h (with jitter)
@@ -20,6 +21,8 @@ Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circui
 - **Dead letter queue** — failed deliveries tracked for manual retry
 - **Delivery logs** — full audit trail (status code, latency, response body)
 - **Per-attempt audit log** — every attempt recorded with status, latency, response body, and errors
+- **Replay and bulk retry** — requeue failed deliveries or replay an event to active endpoints
+- **Retention and redaction controls** — purge stored payloads/response bodies and sanitize data before persistence
 - **Endpoint snapshotting** — queued deliveries keep their original URL and signing secret during retries
 - **Multi-instance safe** — `FOR UPDATE SKIP LOCKED` prevents duplicate delivery
 - **Graceful shutdown** — waits for in-flight deliveries on process exit
@@ -61,6 +64,14 @@ psql -d your_database -f node_modules/@nestarc/webhook/src/sql/migrations/v0.9.0
 ```
 
 See [CHANGELOG.md](./CHANGELOG.md) for release-specific migration notes.
+
+### Upgrading from versions before 0.13.0
+
+Existing databases need the v0.13.0 additive migration for idempotent publish keys, correlation IDs, and payload purge metadata:
+
+```bash
+psql -d your_database -f node_modules/@nestarc/webhook/src/sql/migrations/v0.13.0.sql
+```
 
 ## Quick Start
 
@@ -143,6 +154,17 @@ export class OrderService {
 }
 ```
 
+Use an idempotency key when the producer may retry the same business operation:
+
+```typescript
+await this.webhooks.send(new OrderCreatedEvent(order.id, order.total), {
+  idempotencyKey: `order:${order.id}:created`,
+  correlationId: requestId,
+});
+```
+
+Duplicate sends with the same tenant, event type, and idempotency key return the existing event ID and do not enqueue duplicate deliveries.
+
 ### 4. Manage endpoints
 
 ```typescript
@@ -174,6 +196,8 @@ export class WebhookController {
 | `sendToTenant(tenantId, event)` | Publish to tenant-specific endpoints only |
 | `sendToEndpoints(endpointIds, event)` | Publish to specific endpoint IDs only |
 
+All publish methods accept optional `WebhookPublishOptions` with `idempotencyKey` and `correlationId`.
+
 ### WebhookEndpointAdminService
 
 | Method | Description |
@@ -193,6 +217,14 @@ export class WebhookController {
 | `getDeliveryLogs(endpointId, filters?)` | Query delivery history |
 | `getDeliveryAttempts(deliveryId)` | Query per-attempt audit records for a delivery |
 | `retryDelivery(deliveryId)` | Manually retry a failed delivery |
+| `retryFailedDeliveries(filters, options?)` | Requeue matching failed deliveries in bulk |
+| `replayEvent(eventId, options?)` | Create new delivery rows for an existing event and currently active endpoints |
+
+### WebhookRetentionAdminService
+
+| Method | Description |
+|--------|-------------|
+| `purgeExpiredData(now?)` | Apply configured retention policy and return purge counts |
 
 ### WebhookSigner
 
@@ -201,6 +233,7 @@ export class WebhookController {
 | `sign(eventId, timestamp, body, secret)` | Generate Standard Webhooks signature headers |
 | `signAll(eventId, timestamp, body, secrets[])` | Generate multi-signature headers for secret rotation overlap |
 | `verify(eventId, timestamp, body, secret, signature)` | Verify a webhook signature |
+| `verifyWithTolerance(eventId, timestamp, body, secret, signature, options)` | Verify a signature and reject timestamps outside `options.toleranceSeconds` |
 | `generateSecret()` | Generate a random base64 signing secret |
 
 > **Deprecated:** `WebhookAdminService` is a facade that delegates to `WebhookEndpointAdminService` and `WebhookDeliveryAdminService`. It has been deprecated since `v0.2.0` and will be removed in `v1.0.0`.
@@ -224,6 +257,11 @@ export class WebhookController {
 | `polling.drainWhileBacklogged` | `false` | Keep claiming additional batches inside one poll while backlog and capacity remain |
 | `polling.maxDrainLoopsPerPoll` | `1`, or `10` when drain mode is enabled | Max claim loops inside one poll cycle |
 | `polling.drainLoopDelayMs` | `0` | Optional delay between drain loops |
+| `retention.eventPayloadRetentionDays` | — | Replace terminal event payloads with `{}` after this many days. Disabled unless set. |
+| `retention.deliveryResponseBodyRetentionDays` | — | Clear terminal delivery response bodies after this many days. Disabled unless set. |
+| `retention.attemptResponseBodyRetentionDays` | — | Clear attempt response bodies after this many days. Disabled unless set. |
+| `redaction.sanitizePayload` | — | Minimize payload before persistence and delivery. This changes delivered content. |
+| `redaction.sanitizeResponseBody` | — | Sanitize or suppress response bodies before storing delivery and attempt rows. |
 | `allowPrivateUrls` | `false` | Allow private/internal URLs (dev/test only) |
 | `secretVault` | `PlaintextSecretVault` | Custom vault for encrypting/decrypting endpoint secrets at rest |
 | `onDeliveryFailed` | — | Fire-and-forget callback when a delivery exhausts retries or receives a non-retryable response. Receives `DeliveryFailedContext` (`tenantId` is `null` for global endpoints). See **Delivery failure classification** below. |
@@ -273,6 +311,52 @@ const summary = await deliveryRepository.getBacklogSummary?.();
 ```
 
 The summary includes `pendingCount`, `sendingCount`, `runnablePendingCount`, `oldestPendingAgeMs`, and `oldestRunnableAgeMs`.
+
+### Manual Retry, Bulk Retry, And Replay
+
+```ts
+await deliveryAdmin.retryDelivery(deliveryId, {
+  reason: 'customer requested retry',
+});
+
+await deliveryAdmin.retryFailedDeliveries({
+  endpointId,
+  eventType: 'order.created',
+  limit: 100,
+});
+
+await deliveryAdmin.replayEvent(eventId, {
+  tenantId: 'tenant_123',
+  reason: 'customer support replay',
+});
+```
+
+Manual retries only requeue failed deliveries. Event replay reuses the original event ID and creates new delivery rows for currently active matching endpoints using their current URL and signing secret snapshots.
+
+### Retention And Redaction
+
+Retention is disabled unless configured. Applications can call `WebhookRetentionAdminService.purgeExpiredData()` from their own scheduler:
+
+```ts
+WebhookModule.forRoot({
+  prisma,
+  retention: {
+    eventPayloadRetentionDays: 30,
+    deliveryResponseBodyRetentionDays: 14,
+    attemptResponseBodyRetentionDays: 7,
+  },
+  redaction: {
+    sanitizePayload(payload) {
+      return { ...payload, email: undefined };
+    },
+    sanitizeResponseBody() {
+      return null;
+    },
+  },
+});
+```
+
+`sanitizePayload` runs before persistence and dispatch, so it changes the delivered webhook payload. Review retention and redaction policies with your security and legal teams before storing sensitive data.
 
 Webhook receiver responses are classified before scheduling another attempt:
 
@@ -409,6 +493,19 @@ const isValid = signer.verify(
   rawBody,
   signingSecret,
   headers['webhook-signature'],
+);
+```
+
+To reject replayed signatures, use an explicit timestamp tolerance:
+
+```ts
+const isValidFreshRequest = signer.verifyWithTolerance(
+  headers['webhook-id'],
+  Number(headers['webhook-timestamp']),
+  rawBody,
+  signingSecret,
+  headers['webhook-signature'],
+  { toleranceSeconds: 300 },
 );
 ```
 

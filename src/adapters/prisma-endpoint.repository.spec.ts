@@ -2,6 +2,48 @@ import { PrismaEndpointRepository } from './prisma-endpoint.repository';
 import { ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED } from '../webhook.constants';
 
 describe('PrismaEndpointRepository', () => {
+  describe('createEndpoint', () => {
+    it('stores tenant IDs as opaque strings without UUID casts', async () => {
+      const prisma = {
+        $queryRawUnsafe: jest.fn().mockResolvedValue([
+          {
+            id: 'endpoint-1',
+            url: 'https://example.com/hook',
+            secret: 'secret',
+            events: ['order.created'],
+            active: true,
+            description: null,
+            metadata: null,
+            tenantId: 'tenant_123',
+            consecutiveFailures: 0,
+            disabledAt: null,
+            disabledReason: null,
+            previousSecretExpiresAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ]),
+      };
+      const repo = new PrismaEndpointRepository(prisma);
+
+      await expect(
+        repo.createEndpoint({
+          url: 'https://example.com/hook',
+          events: ['order.created'],
+          secret: 'secret',
+          description: null,
+          metadata: null,
+          tenantId: 'tenant_123',
+        }),
+      ).resolves.toMatchObject({ tenantId: 'tenant_123' });
+
+      const [query, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+      expect(query.replace(/\s+/g, ' ')).toContain('tenant_id');
+      expect(query).not.toContain('$6::uuid');
+      expect(values).toContain('tenant_123');
+    });
+  });
+
   describe('resetFailures', () => {
     it('only clears disabled state when the circuit breaker disabled the endpoint', async () => {
       const prisma = {

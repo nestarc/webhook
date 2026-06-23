@@ -6,6 +6,7 @@ import { WebhookService } from './webhook.service';
 import { WebhookAdminService } from './webhook.admin.service';
 import { WebhookEndpointAdminService } from './webhook.endpoint-admin.service';
 import { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
+import { WebhookRetentionAdminService } from './webhook.retention-admin.service';
 import { WebhookSigner } from './webhook.signer';
 import {
   WEBHOOK_MODULE_OPTIONS,
@@ -67,6 +68,9 @@ describe('WebhookModule', () => {
 
       expect(module.get(WebhookEndpointAdminService)).toBeInstanceOf(WebhookEndpointAdminService);
       expect(module.get(WebhookDeliveryAdminService)).toBeInstanceOf(WebhookDeliveryAdminService);
+      expect(module.get(WebhookRetentionAdminService)).toBeInstanceOf(
+        WebhookRetentionAdminService,
+      );
     });
 
     it('should provide repository port tokens', async () => {

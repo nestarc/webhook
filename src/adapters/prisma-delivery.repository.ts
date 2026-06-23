@@ -11,9 +11,22 @@ import {
   DeliveryLogFilters,
   DeliveryRecord,
   DeliveryResult,
+  ReplayEventOptions,
+  ReplayEventResult,
+  RetryDeliveryOptions,
+  RetryFailedDeliveriesFilters,
+  RetryFailedDeliveriesResult,
+  WebhookRetentionPurgeResult,
 } from '../interfaces/webhook-delivery.interface';
+import {
+  WebhookRedactionOptions,
+  WebhookRetentionOptions,
+} from '../interfaces/webhook-options.interface';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
-import { ATTEMPT_RESPONSE_BODY_MAX_LENGTH } from '../webhook.constants';
+import {
+  ATTEMPT_RESPONSE_BODY_MAX_LENGTH,
+  DEFAULT_MAX_RETRIES,
+} from '../webhook.constants';
 
 type AttemptLogClient = {
   $executeRaw: <T = unknown>(
@@ -28,6 +41,25 @@ type RawDeliveryBacklogSummary = {
   runnablePendingCount: unknown;
   oldestPendingAgeMs: unknown | null;
   oldestRunnableAgeMs: unknown | null;
+};
+
+type RawRetryFailedDeliveriesResult = {
+  matched: unknown;
+  retried: unknown;
+  skipped: unknown;
+};
+
+type RawReplayEventResult = {
+  eventId: string;
+  sourceEventCount: unknown;
+  deliveriesCreated: unknown;
+  endpointIds: string[] | null;
+};
+
+type RawRetentionPurgeResult = {
+  eventsPurged: unknown;
+  deliveriesPurged: unknown;
+  attemptsPurged: unknown;
 };
 
 const STALE_SENDING_RECOVERY_ERROR =
@@ -69,6 +101,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
   constructor(
     protected readonly prisma: any,
     protected readonly vault?: WebhookSecretVault,
+    protected readonly redaction?: WebhookRedactionOptions,
   ) {}
 
   async createDeliveriesInTransaction(
@@ -183,32 +216,34 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
   }
 
   async markSent(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void> {
+    const sanitizedResult = this.sanitizeDeliveryResult(deliveryId, result);
     await this.prisma.$transaction(async (tx: AttemptLogClient) => {
       await tx.$executeRaw`
         UPDATE webhook_deliveries
         SET status = 'SENT', attempts = ${attempts},
             last_attempt_at = NOW(), completed_at = NOW(),
-            response_status = ${result.statusCode ?? null},
-            response_body = ${result.body ?? null},
-            latency_ms = ${result.latencyMs}
+            response_status = ${sanitizedResult.statusCode ?? null},
+            response_body = ${sanitizedResult.body ?? null},
+            latency_ms = ${sanitizedResult.latencyMs}
         WHERE id = ${deliveryId}::uuid`;
-      await this.appendAttemptLog(tx, deliveryId, attempts, 'SENT', result);
+      await this.appendAttemptLog(tx, deliveryId, attempts, 'SENT', sanitizedResult);
     });
   }
 
   async markFailed(deliveryId: string, attempts: number, result: DeliveryResult): Promise<void> {
+    const sanitizedResult = this.sanitizeDeliveryResult(deliveryId, result);
     await this.prisma.$transaction(async (tx: AttemptLogClient) => {
       await tx.$executeRaw`
         UPDATE webhook_deliveries
         SET status = 'FAILED', attempts = ${attempts},
             last_attempt_at = NOW(), completed_at = NOW(),
             next_attempt_at = NULL,
-            response_status = ${result.statusCode ?? null},
-            response_body = ${result.body ?? null},
-            latency_ms = ${result.latencyMs},
-            last_error = ${result.error ?? null}
+            response_status = ${sanitizedResult.statusCode ?? null},
+            response_body = ${sanitizedResult.body ?? null},
+            latency_ms = ${sanitizedResult.latencyMs},
+            last_error = ${sanitizedResult.error ?? null}
         WHERE id = ${deliveryId}::uuid`;
-      await this.appendAttemptLog(tx, deliveryId, attempts, 'FAILED', result);
+      await this.appendAttemptLog(tx, deliveryId, attempts, 'FAILED', sanitizedResult);
     });
   }
 
@@ -218,17 +253,18 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     nextAt: Date,
     result: DeliveryResult,
   ): Promise<void> {
+    const sanitizedResult = this.sanitizeDeliveryResult(deliveryId, result);
     await this.prisma.$transaction(async (tx: AttemptLogClient) => {
       await tx.$executeRaw`
         UPDATE webhook_deliveries
         SET status = 'PENDING', attempts = ${attempts},
             last_attempt_at = NOW(), next_attempt_at = ${nextAt},
-            response_status = ${result.statusCode ?? null},
-            response_body = ${result.body ?? null},
-            latency_ms = ${result.latencyMs},
-            last_error = ${result.error ?? null}
+            response_status = ${sanitizedResult.statusCode ?? null},
+            response_body = ${sanitizedResult.body ?? null},
+            latency_ms = ${sanitizedResult.latencyMs},
+            last_error = ${sanitizedResult.error ?? null}
         WHERE id = ${deliveryId}::uuid`;
-      await this.appendAttemptLog(tx, deliveryId, attempts, 'PENDING', result);
+      await this.appendAttemptLog(tx, deliveryId, attempts, 'PENDING', sanitizedResult);
     });
   }
 
@@ -435,12 +471,237 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
       ORDER BY attempt_number ASC`;
   }
 
-  async retryDelivery(deliveryId: string): Promise<boolean> {
+  async retryDelivery(
+    deliveryId: string,
+    _options?: RetryDeliveryOptions,
+  ): Promise<boolean> {
     const result = await this.prisma.$executeRaw`
       UPDATE webhook_deliveries
-      SET status = 'PENDING', next_attempt_at = NOW()
+      SET status = 'PENDING',
+          next_attempt_at = NOW(),
+          max_attempts = GREATEST(max_attempts, attempts + 1)
       WHERE id = ${deliveryId}::uuid AND status = 'FAILED'`;
     return result > 0;
+  }
+
+  async retryFailedDeliveries(
+    filters: RetryFailedDeliveriesFilters,
+    _options?: RetryDeliveryOptions,
+  ): Promise<RetryFailedDeliveriesResult> {
+    if (filters.status && filters.status !== 'FAILED') {
+      return { matched: 0, retried: 0, skipped: 0 };
+    }
+
+    const limit = filters.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+      throw new Error('Bulk retry limit must be between 1 and 1000');
+    }
+
+    const conditions = [`d.status = 'FAILED'`];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+
+    if (filters.endpointId) {
+      conditions.push(`d.endpoint_id = $${paramIndex++}::uuid`);
+      values.push(filters.endpointId);
+    }
+    if (filters.eventType) {
+      conditions.push(`ev.event_type = $${paramIndex++}`);
+      values.push(filters.eventType);
+    }
+    if (filters.since) {
+      conditions.push(`d.completed_at >= $${paramIndex++}`);
+      values.push(filters.since);
+    }
+    if (filters.until) {
+      conditions.push(`d.completed_at <= $${paramIndex++}`);
+      values.push(filters.until);
+    }
+
+    values.push(limit);
+    const query = `
+      WITH candidates AS (
+        SELECT d.id
+        FROM webhook_deliveries d
+        JOIN webhook_events ev ON ev.id = d.event_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY d.completed_at DESC NULLS LAST, d.id
+        LIMIT $${paramIndex}
+        FOR UPDATE SKIP LOCKED
+      ),
+      updated AS (
+        UPDATE webhook_deliveries d
+        SET status = 'PENDING',
+            next_attempt_at = NOW(),
+            max_attempts = GREATEST(max_attempts, attempts + 1)
+        WHERE d.id IN (SELECT id FROM candidates)
+        RETURNING d.id
+      )
+      SELECT
+        (SELECT COUNT(*) FROM candidates) AS matched,
+        (SELECT COUNT(*) FROM updated) AS retried,
+        (SELECT COUNT(*) FROM candidates) - (SELECT COUNT(*) FROM updated) AS skipped`;
+
+    const rows = (await this.prisma.$queryRawUnsafe(
+      query,
+      ...values,
+    )) as RawRetryFailedDeliveriesResult[];
+    const [result] = rows;
+
+    return {
+      matched: normalizeBacklogNumber(result?.matched ?? 0, 'matched'),
+      retried: normalizeBacklogNumber(result?.retried ?? 0, 'retried'),
+      skipped: normalizeBacklogNumber(result?.skipped ?? 0, 'skipped'),
+    };
+  }
+
+  async replayEvent(
+    eventId: string,
+    options?: ReplayEventOptions,
+  ): Promise<ReplayEventResult> {
+    const tenantId = options?.tenantId ?? null;
+    const endpointIds = options?.endpointIds ?? null;
+    const [result] = await this.prisma.$queryRaw<RawReplayEventResult[]>`
+      WITH source_event AS (
+        SELECT id, event_type, tenant_id
+        FROM webhook_events
+        WHERE id = ${eventId}::uuid
+          AND payload_purged_at IS NULL
+      ),
+      selected_endpoints AS (
+        SELECT
+          e.id,
+          e.url,
+          e.secret,
+          CASE
+            WHEN e.previous_secret IS NOT NULL
+             AND e.previous_secret_expires_at IS NOT NULL
+             AND e.previous_secret_expires_at > NOW()
+            THEN e.previous_secret
+            ELSE NULL
+          END AS secondary_secret
+        FROM webhook_endpoints e
+        JOIN source_event ev ON true
+        WHERE e.active = true
+          AND (${tenantId}::text IS NULL OR e.tenant_id = ${tenantId})
+          AND (${endpointIds}::uuid[] IS NULL OR e.id = ANY(${endpointIds}::uuid[]))
+          AND (ev.event_type = ANY(e.events) OR '*' = ANY(e.events))
+      ),
+      inserted AS (
+        INSERT INTO webhook_deliveries (
+          event_id,
+          endpoint_id,
+          status,
+          attempts,
+          max_attempts,
+          next_attempt_at,
+          endpoint_url_snapshot,
+          signing_secret_snapshot,
+          secondary_signing_secret_snapshot
+        )
+        SELECT
+          ${eventId}::uuid,
+          e.id,
+          'PENDING',
+          0,
+          ${DEFAULT_MAX_RETRIES},
+          NOW(),
+          e.url,
+          e.secret,
+          e.secondary_secret
+        FROM selected_endpoints e
+        RETURNING endpoint_id
+      )
+      SELECT
+        ${eventId} AS "eventId",
+        (SELECT COUNT(*) FROM source_event) AS "sourceEventCount",
+        COUNT(inserted.endpoint_id) AS "deliveriesCreated",
+        COALESCE(array_agg(inserted.endpoint_id::text)
+          FILTER (WHERE inserted.endpoint_id IS NOT NULL), ARRAY[]::text[]) AS "endpointIds"
+      FROM inserted`;
+
+    if (normalizeBacklogNumber(result?.sourceEventCount ?? 0, 'sourceEventCount') === 0) {
+      throw new Error('Webhook event is missing or its payload has been purged');
+    }
+
+    return {
+      eventId: result.eventId,
+      deliveriesCreated: normalizeBacklogNumber(
+        result.deliveriesCreated,
+        'deliveriesCreated',
+      ),
+      endpointIds: result.endpointIds ?? [],
+    };
+  }
+
+  async purgeExpiredData(
+    options: WebhookRetentionOptions,
+    now = new Date(),
+  ): Promise<WebhookRetentionPurgeResult> {
+    const eventPayloadRetentionDays = options.eventPayloadRetentionDays ?? null;
+    const deliveryResponseBodyRetentionDays =
+      options.deliveryResponseBodyRetentionDays ?? null;
+    const attemptResponseBodyRetentionDays =
+      options.attemptResponseBodyRetentionDays ?? null;
+
+    if (
+      eventPayloadRetentionDays == null &&
+      deliveryResponseBodyRetentionDays == null &&
+      attemptResponseBodyRetentionDays == null
+    ) {
+      return { eventsPurged: 0, deliveriesPurged: 0, attemptsPurged: 0 };
+    }
+
+    const [result] = await this.prisma.$queryRaw<RawRetentionPurgeResult[]>`
+      WITH event_payloads AS (
+        UPDATE webhook_events ev
+        SET payload = '{}'::jsonb,
+            payload_purged_at = ${now}
+        WHERE ${eventPayloadRetentionDays}::int IS NOT NULL
+          AND ev.payload_purged_at IS NULL
+          AND ev.created_at <= ${now} - (${eventPayloadRetentionDays}::text || ' days')::interval
+          AND NOT EXISTS (
+            SELECT 1
+            FROM webhook_deliveries d
+            WHERE d.event_id = ev.id
+              AND d.status IN ('PENDING', 'SENDING')
+          )
+        RETURNING ev.id
+      ),
+      delivery_bodies AS (
+        UPDATE webhook_deliveries d
+        SET response_body = NULL
+        WHERE ${deliveryResponseBodyRetentionDays}::int IS NOT NULL
+          AND d.response_body IS NOT NULL
+          AND d.completed_at IS NOT NULL
+          AND d.completed_at <= ${now} - (${deliveryResponseBodyRetentionDays}::text || ' days')::interval
+        RETURNING d.id
+      ),
+      attempt_bodies AS (
+        UPDATE webhook_delivery_attempts a
+        SET response_body = NULL,
+            response_body_truncated = FALSE
+        WHERE ${attemptResponseBodyRetentionDays}::int IS NOT NULL
+          AND a.response_body IS NOT NULL
+          AND a.created_at <= ${now} - (${attemptResponseBodyRetentionDays}::text || ' days')::interval
+        RETURNING a.id
+      )
+      SELECT
+        (SELECT COUNT(*) FROM event_payloads) AS "eventsPurged",
+        (SELECT COUNT(*) FROM delivery_bodies) AS "deliveriesPurged",
+        (SELECT COUNT(*) FROM attempt_bodies) AS "attemptsPurged"`;
+
+    return {
+      eventsPurged: normalizeBacklogNumber(result?.eventsPurged ?? 0, 'eventsPurged'),
+      deliveriesPurged: normalizeBacklogNumber(
+        result?.deliveriesPurged ?? 0,
+        'deliveriesPurged',
+      ),
+      attemptsPurged: normalizeBacklogNumber(
+        result?.attemptsPurged ?? 0,
+        'attemptsPurged',
+      ),
+    };
   }
 
   async createTestDelivery(eventId: string, endpointId: string): Promise<void> {
@@ -505,5 +766,26 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
         ${result.latencyMs},
         ${result.error ?? null}
       )`;
+  }
+
+  private sanitizeDeliveryResult(
+    deliveryId: string,
+    result: DeliveryResult,
+  ): DeliveryResult {
+    if (result.body == null || !this.redaction?.sanitizeResponseBody) {
+      return result;
+    }
+
+    const sanitizedBody = this.redaction.sanitizeResponseBody(result.body, {
+      deliveryId,
+      endpointId: null,
+      eventId: null,
+      statusCode: result.statusCode ?? null,
+    });
+
+    return {
+      ...result,
+      body: sanitizedBody ?? undefined,
+    };
   }
 }

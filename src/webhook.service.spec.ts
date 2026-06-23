@@ -18,6 +18,7 @@ function createMockRepos() {
   const eventRepo = {
     saveEvent: jest.fn(),
     saveEventInTransaction: jest.fn(),
+    saveEventOnceInTransaction: jest.fn(),
   };
 
   const endpointRepo = {
@@ -151,6 +152,103 @@ describe('WebhookService', () => {
         'evt-custom',
         ['ep-1'],
         10,
+      );
+    });
+
+    it('should save idempotent events once and enqueue deliveries only for newly created events', async () => {
+      const eventId = 'evt-idempotent';
+      eventRepo.saveEventOnceInTransaction.mockResolvedValueOnce({
+        id: eventId,
+        created: true,
+      });
+      endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-1' }),
+      ]);
+      deliveryRepo.createDeliveriesInTransaction.mockResolvedValueOnce(undefined);
+
+      const result = await (service as any).send(new TestEvent('t-idem'), {
+        idempotencyKey: 'order-1:create',
+        correlationId: 'req-1',
+      });
+
+      expect(result).toBe(eventId);
+      expect(eventRepo.saveEventInTransaction).not.toHaveBeenCalled();
+      expect(eventRepo.saveEventOnceInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 't-idem' },
+        null,
+        {
+          idempotencyKey: 'order-1:create',
+          correlationId: 'req-1',
+        },
+      );
+      expect(deliveryRepo.createDeliveriesInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        eventId,
+        ['ep-1'],
+        5,
+      );
+    });
+
+    it('should return the existing event ID and skip deliveries for duplicate idempotent sends', async () => {
+      eventRepo.saveEventOnceInTransaction.mockResolvedValueOnce({
+        id: 'evt-existing',
+        created: false,
+      });
+
+      const result = await (service as any).send(new TestEvent('t-idem'), {
+        idempotencyKey: 'order-1:create',
+      });
+
+      expect(result).toBe('evt-existing');
+      expect(endpointRepo.findMatchingEndpointsInTransaction).not.toHaveBeenCalled();
+      expect(deliveryRepo.createDeliveriesInTransaction).not.toHaveBeenCalled();
+    });
+
+    it('should reject idempotent sends when the event repository does not support them', async () => {
+      delete (eventRepo as any).saveEventOnceInTransaction;
+
+      await expect(
+        (service as any).send(new TestEvent('t-idem'), {
+          idempotencyKey: 'order-1:create',
+        }),
+      ).rejects.toThrow(
+        'WebhookEventRepository does not support idempotent event persistence',
+      );
+    });
+
+    it('should sanitize payload before persistence and matching endpoint lookup', async () => {
+      const mocks = createMockRepos();
+      const sanitizePayload = jest.fn().mockReturnValue({
+        testId: 'redacted',
+      });
+      const customService = new WebhookService(
+        mocks.eventRepo as unknown as WebhookEventRepository,
+        mocks.endpointRepo as unknown as WebhookEndpointRepository,
+        mocks.deliveryRepo as unknown as WebhookDeliveryRepository,
+        {
+          redaction: {
+            sanitizePayload,
+          },
+        } as any,
+      );
+      mocks.eventRepo.saveEventInTransaction.mockResolvedValueOnce('evt-redacted');
+      mocks.endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValueOnce([
+        makeEndpoint({ id: 'ep-1' }),
+      ]);
+
+      await customService.send(new TestEvent('sensitive'));
+
+      expect(sanitizePayload).toHaveBeenCalledWith(
+        { testId: 'sensitive' },
+        { eventType: 'test.created', tenantId: null },
+      );
+      expect(mocks.eventRepo.saveEventInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 'redacted' },
+        null,
       );
     });
   });

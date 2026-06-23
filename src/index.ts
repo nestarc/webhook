@@ -9,7 +9,11 @@ export { WebhookDeliveryWorker } from './webhook.delivery-worker';
 export { WebhookDispatcher } from './webhook.dispatcher';
 /** @internal Wired automatically by WebhookModule. Exported for advanced testing/custom integration only. */
 export { WebhookRetryPolicy } from './webhook.retry-policy';
-export { WebhookSigner, type SignatureHeaders } from './webhook.signer';
+export {
+  WebhookSigner,
+  type SignatureHeaders,
+  type WebhookVerificationOptions,
+} from './webhook.signer';
 /** @internal Wired automatically by WebhookModule. Exported for advanced testing/custom integration only. */
 export { WebhookCircuitBreaker } from './webhook.circuit-breaker';
 export { WebhookEvent } from './webhook.event';
@@ -17,11 +21,15 @@ export { WebhookEvent } from './webhook.event';
 // Admin services
 export { WebhookEndpointAdminService } from './webhook.endpoint-admin.service';
 export { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
+export { WebhookRetentionAdminService } from './webhook.retention-admin.service';
 /** @deprecated since v0.2.0. Will be removed in v1.0.0. Use {@link WebhookEndpointAdminService} and {@link WebhookDeliveryAdminService}. */
 export { WebhookAdminService } from './webhook.admin.service';
 
 // Port interfaces
-export type { WebhookEventRepository } from './ports/webhook-event.repository';
+export type {
+  WebhookEventRepository,
+  SavedWebhookEvent,
+} from './ports/webhook-event.repository';
 export type {
   WebhookEndpointRepository,
   ResolvedCreateEndpointInput,
@@ -49,6 +57,9 @@ export type {
   WebhookModuleOptions,
   WebhookModuleAsyncOptions,
   WebhookOptionsFactory,
+  WebhookPublishOptions,
+  WebhookRetentionOptions,
+  WebhookRedactionOptions,
   DeliveryOptions,
   CircuitBreakerOptions,
   PollingOptions,
@@ -81,6 +92,12 @@ export type {
   EventRecord,
   DeliveryResult,
   DeliveryLogFilters,
+  RetryDeliveryOptions,
+  RetryFailedDeliveriesFilters,
+  RetryFailedDeliveriesResult,
+  ReplayEventOptions,
+  ReplayEventResult,
+  WebhookRetentionPurgeResult,
 } from './interfaces/webhook-delivery.interface';
 
 // Constants & tokens

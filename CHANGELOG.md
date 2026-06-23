@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-23
+
+### Added
+
+- Producer-side idempotent publish via `WebhookPublishOptions.idempotencyKey` and `WebhookEventRepository.saveEventOnceInTransaction()`.
+- `WebhookDeliveryAdminService.retryFailedDeliveries()` for bounded bulk retry of failed deliveries.
+- `WebhookDeliveryAdminService.replayEvent()` for replaying an existing event to currently active matching endpoints.
+- `WebhookRetentionAdminService.purgeExpiredData()` for application-scheduled retention cleanup.
+- Retention options for event payloads, delivery response bodies, and attempt response bodies.
+- Redaction hooks for payload minimization and response body suppression before persistence.
+- `WebhookSigner.verifyWithTolerance()` and `WebhookVerificationOptions` for timestamp freshness checks.
+- v0.13.0 SQL migration for idempotency keys, correlation IDs, and payload purge metadata.
+
+### Changed
+
+- `WebhookDeliveryRepository.retryDelivery()` now accepts optional retry metadata and grants a failed delivery at least one additional manual attempt.
+- Default Prisma repositories now treat `tenant_id` as an opaque string on insert, matching the SQL schema and README examples.
+
+### Migration
+
+Existing databases should run:
+
+```bash
+psql -d your_database -f node_modules/@nestarc/webhook/src/sql/migrations/v0.13.0.sql
+```
+
+The migration adds `webhook_events.idempotency_key`, `webhook_events.correlation_id`, `webhook_events.payload_purged_at`, and `webhook_events_idempotency_key_idx`.
+
 ## [0.12.1] - 2026-05-03
 
 ### Fixed

@@ -8,6 +8,11 @@ export interface SignatureHeaders {
   'webhook-signature': string;
 }
 
+export interface WebhookVerificationOptions {
+  toleranceSeconds: number;
+  now?: Date;
+}
+
 @Injectable()
 export class WebhookSigner {
   signAll(
@@ -58,6 +63,33 @@ export class WebhookSigner {
 
       return crypto.timingSafeEqual(a, b);
     });
+  }
+
+  verifyWithTolerance(
+    eventId: string,
+    timestamp: number,
+    body: string,
+    secret: string,
+    signature: string,
+    options: WebhookVerificationOptions,
+  ): boolean {
+    if (
+      !Number.isFinite(options.toleranceSeconds) ||
+      options.toleranceSeconds < 0
+    ) {
+      throw new Error('toleranceSeconds must be a finite non-negative number');
+    }
+
+    if (!Number.isFinite(timestamp)) {
+      return false;
+    }
+
+    const nowSeconds = Math.floor((options.now ?? new Date()).getTime() / 1000);
+    if (Math.abs(nowSeconds - timestamp) > options.toleranceSeconds) {
+      return false;
+    }
+
+    return this.verify(eventId, timestamp, body, secret, signature);
   }
 
   generateSecret(): string {

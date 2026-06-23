@@ -477,6 +477,122 @@ describe('Webhook E2E', () => {
     expect(logs[0].status).toBe('SENT');
   });
 
+  it('should deduplicate idempotent tenant publishes with non-UUID tenant IDs', async () => {
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+      tenantId: 'tenant_123',
+    });
+
+    const firstEventId = await webhookService.sendToTenant(
+      'tenant_123',
+      new TestOrderEvent('ord_idempotent'),
+      { idempotencyKey: 'order:ord_idempotent:created' },
+    );
+    const secondEventId = await webhookService.sendToTenant(
+      'tenant_123',
+      new TestOrderEvent('ord_idempotent'),
+      { idempotencyKey: 'order:ord_idempotent:created' },
+    );
+
+    expect(secondEventId).toBe(firstEventId);
+
+    const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM webhook_deliveries
+      WHERE endpoint_id = ${endpoint.id}::uuid`;
+    expect(Number(rows[0].count)).toBe(1);
+  });
+
+  it('should support bulk retry of failed deliveries', async () => {
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+    });
+
+    serverResponseStatus = 410;
+    await webhookService.send(new TestOrderEvent('ord_bulk_retry_1'));
+    await webhookService.send(new TestOrderEvent('ord_bulk_retry_2'));
+    await deliveryWorker.poll();
+
+    const result = await adminService.retryFailedDeliveries({
+      endpointId: endpoint.id,
+      eventType: 'order.created',
+      limit: 10,
+    });
+
+    expect(result).toEqual({ matched: 2, retried: 2, skipped: 0 });
+
+    const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM webhook_deliveries
+      WHERE endpoint_id = ${endpoint.id}::uuid
+        AND status = 'PENDING'`;
+    expect(Number(rows[0].count)).toBe(2);
+  });
+
+  it('should replay an event to active matching endpoints', async () => {
+    await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+    });
+
+    const eventId = await webhookService.send(new TestOrderEvent('ord_replay'));
+    await deliveryWorker.poll();
+    expect(receivedRequests).toHaveLength(1);
+
+    const result = await adminService.replayEvent(eventId, {
+      reason: 'e2e replay',
+    });
+
+    expect(result.eventId).toBe(eventId);
+    expect(result.deliveriesCreated).toBe(1);
+    expect(result.endpointIds).toHaveLength(1);
+
+    await deliveryWorker.poll();
+    expect(receivedRequests).toHaveLength(2);
+  });
+
+  it('should purge expired webhook payload and response body data', async () => {
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+    });
+
+    const eventId = await webhookService.send(new TestOrderEvent('ord_purge'));
+    await deliveryWorker.poll();
+
+    const purgeResult = await deliveryRepo.purgeExpiredData!(
+      {
+        eventPayloadRetentionDays: 0,
+        deliveryResponseBodyRetentionDays: 0,
+        attemptResponseBodyRetentionDays: 0,
+      },
+      new Date(Date.now() + 1000),
+    );
+
+    expect(purgeResult.eventsPurged).toBe(1);
+    expect(purgeResult.deliveriesPurged).toBe(1);
+    expect(purgeResult.attemptsPurged).toBe(1);
+
+    const rows = await prisma.$queryRaw<
+      Array<{
+        payload: unknown;
+        payload_purged_at: Date | null;
+        response_body: string | null;
+      }>
+    >`
+      SELECT ev.payload, ev.payload_purged_at, d.response_body
+      FROM webhook_events ev
+      JOIN webhook_deliveries d ON d.event_id = ev.id
+      WHERE ev.id = ${eventId}::uuid
+        AND d.endpoint_id = ${endpoint.id}::uuid`;
+
+    expect(rows[0].payload).toEqual({});
+    expect(rows[0].payload_purged_at).toBeInstanceOf(Date);
+    expect(rows[0].response_body).toBeNull();
+  });
+
   it('should send test event to endpoint', async () => {
     const endpoint = await adminService.createEndpoint({
       url: `http://localhost:${mockServerPort}/webhook`,

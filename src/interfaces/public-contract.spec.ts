@@ -1,6 +1,12 @@
 import type {
   DeliveryAttemptRecord,
   DeliveryRecord,
+  ReplayEventOptions,
+  ReplayEventResult,
+  RetryDeliveryOptions,
+  RetryFailedDeliveriesFilters,
+  RetryFailedDeliveriesResult,
+  WebhookRetentionPurgeResult,
 } from './webhook-delivery.interface';
 import type { EndpointRecord } from './webhook-endpoint.interface';
 import type {
@@ -11,6 +17,9 @@ import type {
   WebhookDeliveryProcessingResult,
   WebhookModuleAsyncOptions,
   WebhookModuleOptions,
+  WebhookPublishOptions,
+  WebhookRedactionOptions,
+  WebhookRetentionOptions,
   WebhookPollContext,
   WebhookPollResult,
   WebhookWorkerObserver,
@@ -19,11 +28,24 @@ import type {
   DeliveryBacklogSummary as ExportedDeliveryBacklogSummary,
   DeliveryRetryScheduledContext as ExportedDeliveryRetryScheduledContext,
   EndpointDegradedContext as ExportedEndpointDegradedContext,
+  ReplayEventOptions as ExportedReplayEventOptions,
+  ReplayEventResult as ExportedReplayEventResult,
+  RetryDeliveryOptions as ExportedRetryDeliveryOptions,
+  RetryFailedDeliveriesFilters as ExportedRetryFailedDeliveriesFilters,
+  RetryFailedDeliveriesResult as ExportedRetryFailedDeliveriesResult,
+  SavedWebhookEvent as ExportedSavedWebhookEvent,
   WebhookDeliveryProcessingResult as ExportedWebhookDeliveryProcessingResult,
   WebhookPollContext as ExportedWebhookPollContext,
   WebhookPollResult as ExportedWebhookPollResult,
+  WebhookPublishOptions as ExportedWebhookPublishOptions,
+  WebhookRedactionOptions as ExportedWebhookRedactionOptions,
+  WebhookRetentionOptions as ExportedWebhookRetentionOptions,
+  WebhookRetentionPurgeResult as ExportedWebhookRetentionPurgeResult,
+  WebhookVerificationOptions as ExportedWebhookVerificationOptions,
   WebhookWorkerObserver as ExportedWebhookWorkerObserver,
 } from '../index';
+import type { SavedWebhookEvent } from '../ports/webhook-event.repository';
+import type { WebhookVerificationOptions } from '../webhook.signer';
 import type {
   ClaimedDelivery,
   DeliveryBacklogSummary,
@@ -203,6 +225,66 @@ describe('public interface contracts', () => {
       workerObserver,
     };
 
+    const publishOptions: WebhookPublishOptions = {
+      idempotencyKey: 'order-1:create',
+      correlationId: 'req-1',
+    };
+
+    const retentionOptions: WebhookRetentionOptions = {
+      eventPayloadRetentionDays: 30,
+      deliveryResponseBodyRetentionDays: 14,
+      attemptResponseBodyRetentionDays: 7,
+    };
+
+    const redactionOptions: WebhookRedactionOptions = {
+      sanitizePayload: (payload) => payload,
+      sanitizeResponseBody: () => null,
+    };
+
+    const retentionPurgeResult: WebhookRetentionPurgeResult = {
+      eventsPurged: 1,
+      deliveriesPurged: 2,
+      attemptsPurged: 3,
+    };
+
+    const verificationOptions: WebhookVerificationOptions = {
+      toleranceSeconds: 300,
+      now: new Date(),
+    };
+
+    const savedWebhookEvent: SavedWebhookEvent = {
+      id: 'evt-1',
+      created: true,
+    };
+
+    const retryDeliveryOptions: RetryDeliveryOptions = {
+      reason: 'customer requested replay',
+    };
+
+    const retryFailedDeliveriesFilters: RetryFailedDeliveriesFilters = {
+      endpointId: 'ep-1',
+      eventType: 'order.created',
+      limit: 100,
+    };
+
+    const retryFailedDeliveriesResult: RetryFailedDeliveriesResult = {
+      matched: 3,
+      retried: 2,
+      skipped: 1,
+    };
+
+    const replayEventOptions: ReplayEventOptions = {
+      tenantId: 'tenant_123',
+      endpointIds: ['ep-1'],
+      reason: 'customer support replay',
+    };
+
+    const replayEventResult: ReplayEventResult = {
+      eventId: 'evt-1',
+      deliveriesCreated: 1,
+      endpointIds: ['ep-1'],
+    };
+
     const exportedRetryContext: ExportedDeliveryRetryScheduledContext =
       retryScheduledContext;
     const exportedDegradedContext: ExportedEndpointDegradedContext =
@@ -213,6 +295,43 @@ describe('public interface contracts', () => {
       deliveryProcessingResult;
     const exportedWorkerObserver: ExportedWebhookWorkerObserver = workerObserver;
     const exportedBacklogSummary: ExportedDeliveryBacklogSummary = backlogSummary;
+    const exportedPublishOptions: ExportedWebhookPublishOptions = publishOptions;
+    const exportedRetentionOptions: ExportedWebhookRetentionOptions =
+      retentionOptions;
+    const exportedRedactionOptions: ExportedWebhookRedactionOptions =
+      redactionOptions;
+    const exportedRetentionPurgeResult: ExportedWebhookRetentionPurgeResult =
+      retentionPurgeResult;
+    const exportedVerificationOptions: ExportedWebhookVerificationOptions =
+      verificationOptions;
+    const exportedSavedWebhookEvent: ExportedSavedWebhookEvent = savedWebhookEvent;
+    const exportedRetryDeliveryOptions: ExportedRetryDeliveryOptions =
+      retryDeliveryOptions;
+    const exportedRetryFailedDeliveriesFilters: ExportedRetryFailedDeliveriesFilters =
+      retryFailedDeliveriesFilters;
+    const exportedRetryFailedDeliveriesResult: ExportedRetryFailedDeliveriesResult =
+      retryFailedDeliveriesResult;
+    const exportedReplayEventOptions: ExportedReplayEventOptions =
+      replayEventOptions;
+    const exportedReplayEventResult: ExportedReplayEventResult = replayEventResult;
+    expect(exportedPublishOptions.idempotencyKey).toBe('order-1:create');
+    expect(exportedRetentionOptions.eventPayloadRetentionDays).toBe(30);
+    expect(
+      exportedRedactionOptions.sanitizeResponseBody?.('secret', {
+        deliveryId: 'del-1',
+        endpointId: null,
+        eventId: null,
+        statusCode: 200,
+      }),
+    ).toBeNull();
+    expect(exportedRetentionPurgeResult.eventsPurged).toBe(1);
+    expect(exportedVerificationOptions.toleranceSeconds).toBe(300);
+    expect(exportedSavedWebhookEvent.created).toBe(true);
+    expect(exportedRetryDeliveryOptions.reason).toBe('customer requested replay');
+    expect(exportedRetryFailedDeliveriesFilters.limit).toBe(100);
+    expect(exportedRetryFailedDeliveriesResult.retried).toBe(2);
+    expect(exportedReplayEventOptions.tenantId).toBe('tenant_123');
+    expect(exportedReplayEventResult.deliveriesCreated).toBe(1);
 
     const pollingOptionsWithInvalidConcurrency: PollingOptions = {
       // @ts-expect-error maxConcurrency must be numeric.

@@ -16,6 +16,7 @@ import { WebhookDispatcher } from './webhook.dispatcher';
 import { WebhookRetryPolicy } from './webhook.retry-policy';
 import { WebhookEndpointAdminService } from './webhook.endpoint-admin.service';
 import { WebhookDeliveryAdminService } from './webhook.delivery-admin.service';
+import { WebhookRetentionAdminService } from './webhook.retention-admin.service';
 import { WebhookAdminService } from './webhook.admin.service';
 import {
   WEBHOOK_MODULE_OPTIONS,
@@ -60,7 +61,7 @@ function createPortProviders(options: WebhookModuleOptions): Provider[] {
       provide: WEBHOOK_DELIVERY_REPOSITORY,
       useFactory: (vault: WebhookSecretVault) =>
         options.deliveryRepository ??
-        new PrismaDeliveryRepository(options.prisma, vault),
+        new PrismaDeliveryRepository(options.prisma, vault, options.redaction),
       inject: [WEBHOOK_SECRET_VAULT],
     },
     {
@@ -93,7 +94,8 @@ function createAsyncPortProviders(): Provider[] {
     {
       provide: WEBHOOK_DELIVERY_REPOSITORY,
       useFactory: (opts: WebhookModuleOptions, vault: WebhookSecretVault) =>
-        opts.deliveryRepository ?? new PrismaDeliveryRepository(opts.prisma, vault),
+        opts.deliveryRepository ??
+        new PrismaDeliveryRepository(opts.prisma, vault, opts.redaction),
       inject: [WEBHOOK_MODULE_OPTIONS, WEBHOOK_SECRET_VAULT],
     },
     {
@@ -114,6 +116,7 @@ const CORE_PROVIDERS = [
   WebhookDeliveryWorker,
   WebhookEndpointAdminService,
   WebhookDeliveryAdminService,
+  WebhookRetentionAdminService,
   WebhookAdminService,
 ];
 
@@ -121,6 +124,7 @@ const EXPORTS = [
   WebhookService,
   WebhookEndpointAdminService,
   WebhookDeliveryAdminService,
+  WebhookRetentionAdminService,
   WebhookAdminService,
   WebhookSigner,
   WEBHOOK_EVENT_REPOSITORY,

@@ -6,15 +6,23 @@ import {
   WEBHOOK_EVENT_REPOSITORY,
   WEBHOOK_MODULE_OPTIONS,
 } from './webhook.constants';
-import { WebhookModuleOptions } from './interfaces/webhook-options.interface';
+import {
+  WebhookModuleOptions,
+  WebhookPublishOptions,
+  WebhookRedactionOptions,
+} from './interfaces/webhook-options.interface';
 import { WebhookEventRepository } from './ports/webhook-event.repository';
 import { WebhookEndpointRepository } from './ports/webhook-endpoint.repository';
-import { WebhookDeliveryRepository } from './ports/webhook-delivery.repository';
+import {
+  WebhookDeliveryRepository,
+  WebhookTransaction,
+} from './ports/webhook-delivery.repository';
 
 @Injectable()
 export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
   private readonly maxAttempts: number;
+  private readonly redaction?: WebhookRedactionOptions;
 
   constructor(
     @Inject(WEBHOOK_EVENT_REPOSITORY)
@@ -27,31 +35,54 @@ export class WebhookService {
     options: WebhookModuleOptions,
   ) {
     this.maxAttempts = options.delivery?.maxRetries ?? 5;
+    this.redaction = options.redaction;
   }
 
-  async send(event: WebhookEvent): Promise<string> {
-    return this.sendInternal(event, undefined);
+  async send(event: WebhookEvent, options?: WebhookPublishOptions): Promise<string> {
+    return this.sendInternal(event, undefined, options);
   }
 
-  async sendToTenant(tenantId: string, event: WebhookEvent): Promise<string> {
-    return this.sendInternal(event, tenantId);
+  async sendToTenant(
+    tenantId: string,
+    event: WebhookEvent,
+    options?: WebhookPublishOptions,
+  ): Promise<string> {
+    return this.sendInternal(event, tenantId, options);
   }
 
   async sendToEndpoints(
     endpointIds: string[],
     event: WebhookEvent,
-    tenantId?: string,
+    tenantIdOrOptions?: string | WebhookPublishOptions,
+    options?: WebhookPublishOptions,
   ): Promise<string> {
-    const payload = event.toPayload();
+    const tenantId =
+      typeof tenantIdOrOptions === 'string' ? tenantIdOrOptions : undefined;
+    const publishOptions =
+      typeof tenantIdOrOptions === 'object' ? tenantIdOrOptions : options;
     const eventType = event.eventType;
+    const payload = this.sanitizePayload(
+      event.toPayload(),
+      eventType,
+      tenantId ?? null,
+    );
 
     return this.deliveryRepo.runInTransaction(async (tx) => {
-      const eventId = await this.eventRepo.saveEventInTransaction(
+      const savedEvent = await this.saveEventInTransaction(
         tx,
         eventType,
         payload,
         tenantId ?? null,
+        publishOptions,
       );
+      const eventId = savedEvent.id;
+
+      if (!savedEvent.created) {
+        this.logger.debug(
+          `Idempotent event ${eventType} (${eventId}) already exists; skipping targeted delivery creation`,
+        );
+        return eventId;
+      }
 
       if (endpointIds.length === 0) {
         this.logger.debug(
@@ -78,17 +109,31 @@ export class WebhookService {
   private async sendInternal(
     event: WebhookEvent,
     tenantId: string | undefined,
+    options?: WebhookPublishOptions,
   ): Promise<string> {
-    const payload = event.toPayload();
     const eventType = event.eventType;
+    const payload = this.sanitizePayload(
+      event.toPayload(),
+      eventType,
+      tenantId ?? null,
+    );
 
     return this.deliveryRepo.runInTransaction(async (tx) => {
-      const eventId = await this.eventRepo.saveEventInTransaction(
+      const savedEvent = await this.saveEventInTransaction(
         tx,
         eventType,
         payload,
         tenantId ?? null,
+        options,
       );
+      const eventId = savedEvent.id;
+
+      if (!savedEvent.created) {
+        this.logger.debug(
+          `Idempotent event ${eventType} (${eventId}) already exists; skipping delivery creation`,
+        );
+        return eventId;
+      }
 
       const endpoints =
         await this.endpointRepo.findMatchingEndpointsInTransaction(
@@ -118,5 +163,42 @@ export class WebhookService {
 
       return eventId;
     });
+  }
+
+  private async saveEventInTransaction(
+    tx: WebhookTransaction,
+    eventType: string,
+    payload: Record<string, unknown>,
+    tenantId: string | null,
+    options?: WebhookPublishOptions,
+  ): Promise<{ id: string; created: boolean }> {
+    if (!options?.idempotencyKey) {
+      const id = await this.eventRepo.saveEventInTransaction(
+        tx,
+        eventType,
+        payload,
+        tenantId,
+      );
+      return { id, created: true };
+    }
+
+    if (!this.eventRepo.saveEventOnceInTransaction) {
+      throw new Error(
+        'WebhookEventRepository does not support idempotent event persistence',
+      );
+    }
+
+    return this.eventRepo.saveEventOnceInTransaction(tx, eventType, payload, tenantId, {
+      idempotencyKey: options.idempotencyKey,
+      correlationId: options.correlationId,
+    });
+  }
+
+  private sanitizePayload(
+    payload: Record<string, unknown>,
+    eventType: string,
+    tenantId: string | null,
+  ): Record<string, unknown> {
+    return this.redaction?.sanitizePayload?.(payload, { eventType, tenantId }) ?? payload;
   }
 }

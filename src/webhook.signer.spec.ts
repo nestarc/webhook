@@ -131,6 +131,64 @@ describe('WebhookSigner', () => {
     });
   });
 
+  describe('verifyWithTolerance', () => {
+    it('should accept a valid signature inside the configured timestamp tolerance', () => {
+      const secret = Buffer.from('test-secret').toString('base64');
+      const timestamp = 1_800_000_000;
+      const headers = signer.sign('evt_1', timestamp, 'body', secret);
+
+      const isValid = (signer as any).verifyWithTolerance(
+        'evt_1',
+        timestamp,
+        'body',
+        secret,
+        headers['webhook-signature'],
+        {
+          toleranceSeconds: 300,
+          now: new Date((timestamp + 120) * 1000),
+        },
+      );
+
+      expect(isValid).toBe(true);
+    });
+
+    it('should reject a valid signature outside the configured timestamp tolerance', () => {
+      const secret = Buffer.from('test-secret').toString('base64');
+      const timestamp = 1_800_000_000;
+      const headers = signer.sign('evt_1', timestamp, 'body', secret);
+
+      const isValid = (signer as any).verifyWithTolerance(
+        'evt_1',
+        timestamp,
+        'body',
+        secret,
+        headers['webhook-signature'],
+        {
+          toleranceSeconds: 300,
+          now: new Date((timestamp + 301) * 1000),
+        },
+      );
+
+      expect(isValid).toBe(false);
+    });
+
+    it('should reject invalid tolerance options', () => {
+      const secret = Buffer.from('test-secret').toString('base64');
+      const headers = signer.sign('evt_1', 1_800_000_000, 'body', secret);
+
+      expect(() =>
+        (signer as any).verifyWithTolerance(
+          'evt_1',
+          1_800_000_000,
+          'body',
+          secret,
+          headers['webhook-signature'],
+          { toleranceSeconds: -1 },
+        ),
+      ).toThrow('toleranceSeconds must be a finite non-negative number');
+    });
+  });
+
   describe('generateSecret', () => {
     it('should generate a base64-encoded secret', () => {
       const secret = signer.generateSecret();
