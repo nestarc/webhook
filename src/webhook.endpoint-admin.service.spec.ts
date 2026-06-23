@@ -7,7 +7,7 @@ import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
 
 function makeEndpoint(overrides: Partial<EndpointRecord> = {}): EndpointRecord {
   return {
-    id: 'ep-1', url: 'https://example.com/hook',
+    id: 'ep-1', url: 'https://1.1.1.1/hook',
     events: ['order.created'], active: true, description: null, metadata: null,
     tenantId: null, consecutiveFailures: 0, disabledAt: null, disabledReason: null,
     previousSecretExpiresAt: null,
@@ -50,7 +50,7 @@ describe('WebhookEndpointAdminService', () => {
       mocks.endpointRepo.createEndpoint.mockResolvedValueOnce({ ...makeEndpoint(), secret: 'auto-generated' });
 
       await service.createEndpoint({
-        url: 'https://example.com', events: ['*'], secret: 'auto',
+        url: 'https://1.1.1.1', events: ['*'], secret: 'auto',
       });
 
       // Secret arg should be a base64 string (auto-generated)
@@ -65,7 +65,7 @@ describe('WebhookEndpointAdminService', () => {
       );
 
       await service.createEndpoint({
-        url: 'https://example.com', events: ['*'], secret: validSecret,
+        url: 'https://1.1.1.1', events: ['*'], secret: validSecret,
       });
 
       expect(mocks.endpointRepo.createEndpoint.mock.calls[0][0].secret).toBe(validSecret);
@@ -74,7 +74,7 @@ describe('WebhookEndpointAdminService', () => {
     it('should reject invalid base64 secret', async () => {
       await expect(
         service.createEndpoint({
-          url: 'https://example.com', events: ['*'], secret: '!!!invalid!!!',
+          url: 'https://1.1.1.1', events: ['*'], secret: '!!!invalid!!!',
         }),
       ).rejects.toThrow('Invalid secret');
     });
@@ -83,7 +83,7 @@ describe('WebhookEndpointAdminService', () => {
       const shortSecret = Buffer.from('short').toString('base64');
       await expect(
         service.createEndpoint({
-          url: 'https://example.com', events: ['*'], secret: shortSecret,
+          url: 'https://1.1.1.1', events: ['*'], secret: shortSecret,
         }),
       ).rejects.toThrow('at least 16 bytes');
     });
@@ -136,9 +136,9 @@ describe('WebhookEndpointAdminService', () => {
     });
 
     it('updateEndpoint', async () => {
-      mocks.endpointRepo.updateEndpoint.mockResolvedValueOnce(makeEndpoint({ url: 'https://new.com' }));
-      const result = await service.updateEndpoint('ep-1', { url: 'https://new.com' });
-      expect(result!.url).toBe('https://new.com');
+      mocks.endpointRepo.updateEndpoint.mockResolvedValueOnce(makeEndpoint({ url: 'https://1.0.0.1' }));
+      const result = await service.updateEndpoint('ep-1', { url: 'https://1.0.0.1' });
+      expect(result!.url).toBe('https://1.0.0.1');
     });
 
     it('deleteEndpoint', async () => {

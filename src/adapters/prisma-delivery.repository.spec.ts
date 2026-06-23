@@ -4,6 +4,28 @@ import { PrismaDeliveryRepository } from './prisma-delivery.repository';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
 
 describe('PrismaDeliveryRepository', () => {
+  describe('createDeliveriesInTransaction', () => {
+    it('binds selected endpoint ids to the persisted event tenant and event type', async () => {
+      const tx = {
+        $executeRawUnsafe: jest.fn().mockResolvedValue(1),
+      };
+      const repo = new PrismaDeliveryRepository({});
+
+      await repo.createDeliveriesInTransaction(
+        tx as never,
+        'event-1',
+        ['endpoint-1', 'endpoint-2'],
+        5,
+      );
+
+      const [query] = tx.$executeRawUnsafe.mock.calls[0];
+      expect(query).toContain('JOIN webhook_events ev ON ev.id = $1::uuid');
+      expect(query).toContain('e.active = true');
+      expect(query).toContain('(ev.tenant_id IS NULL OR e.tenant_id = ev.tenant_id)');
+      expect(query).toContain("(ev.event_type = ANY(e.events) OR '*' = ANY(e.events))");
+    });
+  });
+
   describe('schema indexes', () => {
     it('declares partial indexes for runnable pending and sending scans', () => {
       const createTablesSql = readFileSync(
@@ -426,6 +448,8 @@ describe('PrismaDeliveryRepository', () => {
         .replace(/\s+/g, ' ');
       expect(sql).toContain('payload_purged_at IS NULL');
       expect(sql).toContain('e.active = true');
+      expect(sql).toContain('ev.tenant_id =');
+      expect(sql).toContain('(ev.tenant_id IS NULL OR e.tenant_id = ev.tenant_id)');
       expect(sql).toContain('e.url');
       expect(sql).toContain('e.secret');
       expect(sql).toContain('array_agg');

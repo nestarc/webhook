@@ -139,7 +139,11 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
            ELSE NULL
          END
        FROM webhook_endpoints e
-       WHERE e.id = ANY($2::uuid[])`,
+       JOIN webhook_events ev ON ev.id = $1::uuid
+       WHERE e.id = ANY($2::uuid[])
+         AND e.active = true
+         AND (ev.tenant_id IS NULL OR e.tenant_id = ev.tenant_id)
+         AND (ev.event_type = ANY(e.events) OR '*' = ANY(e.events))`,
       eventId,
       endpointIds,
       maxAttempts,
@@ -563,10 +567,11 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
     const endpointIds = options?.endpointIds ?? null;
     const [result] = await this.prisma.$queryRaw<RawReplayEventResult[]>`
       WITH source_event AS (
-        SELECT id, event_type, tenant_id
-        FROM webhook_events
-        WHERE id = ${eventId}::uuid
-          AND payload_purged_at IS NULL
+        SELECT ev.id, ev.event_type, ev.tenant_id
+        FROM webhook_events ev
+        WHERE ev.id = ${eventId}::uuid
+          AND ev.payload_purged_at IS NULL
+          AND (${tenantId}::text IS NULL OR ev.tenant_id = ${tenantId})
       ),
       selected_endpoints AS (
         SELECT
@@ -583,6 +588,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
         FROM webhook_endpoints e
         JOIN source_event ev ON true
         WHERE e.active = true
+          AND (ev.tenant_id IS NULL OR e.tenant_id = ev.tenant_id)
           AND (${tenantId}::text IS NULL OR e.tenant_id = ${tenantId})
           AND (${endpointIds}::uuid[] IS NULL OR e.id = ANY(${endpointIds}::uuid[]))
           AND (ev.event_type = ANY(e.events) OR '*' = ANY(e.events))

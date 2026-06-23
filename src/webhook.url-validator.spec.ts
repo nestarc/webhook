@@ -18,7 +18,7 @@ const mockResolve6 = dns.promises.resolve6 as jest.Mock;
 
 beforeEach(() => {
   // Default: hostname resolves to public IP
-  mockResolve4.mockResolvedValue(['203.0.113.50']);
+  mockResolve4.mockResolvedValue(['1.1.1.1']);
   mockResolve6.mockRejectedValue(new Error('ENODATA'));
 });
 
@@ -43,7 +43,7 @@ describe('validateWebhookUrl', () => {
       'https://customer.com/webhooks',
       'https://api.example.com:8443/hooks',
       'http://webhooks.example.org/v1',
-      'https://203.0.113.50/callback',
+      'https://1.1.1.1/callback',
     ])('should accept %s', async (url) => {
       await expect(validateWebhookUrl(url)).resolves.not.toThrow();
     });
@@ -139,6 +139,24 @@ describe('validateWebhookUrl', () => {
     });
   });
 
+  describe('non-global and special-use addresses', () => {
+    it.each([
+      'http://100.64.0.1/hook',
+      'http://192.0.2.10/hook',
+      'http://198.18.0.1/hook',
+      'http://203.0.113.50/hook',
+      'http://224.0.0.1/hook',
+      'http://240.0.0.1/hook',
+      'http://255.255.255.255/hook',
+      'http://[::]/hook',
+      'http://[100::1]/hook',
+      'http://[2001:db8::1]/hook',
+      'http://[ff02::1]/hook',
+    ])('should reject non-global target %s', async (url) => {
+      await expect(validateWebhookUrl(url)).rejects.toThrow();
+    });
+  });
+
   describe('IPv6 private', () => {
     it.each([
       'http://[fc00::1]/hook',
@@ -210,12 +228,30 @@ describe('validateWebhookUrl', () => {
     });
 
     it('should accept hostname resolving to public IP', async () => {
-      mockResolve4.mockResolvedValueOnce(['203.0.113.50']);
+      mockResolve4.mockResolvedValueOnce(['1.1.1.1']);
       mockResolve6.mockRejectedValueOnce(new Error('ENODATA'));
 
       await expect(
         validateWebhookUrl('https://customer.com/hook'),
       ).resolves.not.toThrow();
+    });
+
+    it('should reject hostnames that resolve to non-global special-use IPs', async () => {
+      mockResolve4.mockResolvedValueOnce(['100.64.0.1']);
+      mockResolve6.mockRejectedValueOnce(new Error('ENODATA'));
+
+      await expect(
+        validateWebhookUrl('http://shared-space.example.com/hook'),
+      ).rejects.toThrow();
+    });
+
+    it('should fail closed when DNS returns no usable addresses', async () => {
+      mockResolve4.mockRejectedValueOnce(new Error('ENODATA'));
+      mockResolve6.mockRejectedValueOnce(new Error('ENODATA'));
+
+      await expect(
+        validateWebhookUrl('https://missing.example.com/hook'),
+      ).rejects.toThrow('did not resolve');
     });
 
     it('should set reason="private" with resolvedIp when DNS bypass detected', async () => {

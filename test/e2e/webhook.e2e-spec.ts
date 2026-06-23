@@ -131,6 +131,7 @@ describe('Webhook E2E', () => {
 
   beforeEach(async () => {
     // Clean data between tests
+    await prisma.$executeRawUnsafe('DELETE FROM webhook_delivery_attempts');
     await prisma.$executeRawUnsafe('DELETE FROM webhook_deliveries');
     await prisma.$executeRawUnsafe('DELETE FROM webhook_events');
     await prisma.$executeRawUnsafe('DELETE FROM webhook_endpoints');
@@ -551,6 +552,65 @@ describe('Webhook E2E', () => {
 
     await deliveryWorker.poll();
     expect(receivedRequests).toHaveLength(2);
+  });
+
+  it('should not create targeted deliveries for endpoints outside the event tenant', async () => {
+    await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/tenant-a`,
+      events: ['order.created'],
+      tenantId: 'tenant-a',
+    });
+    const otherTenantEndpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/tenant-b`,
+      events: ['order.created'],
+      tenantId: 'tenant-b',
+    });
+
+    const eventId = await webhookService.sendToEndpoints(
+      [otherTenantEndpoint.id],
+      new TestOrderEvent('ord_target_tenant_guard'),
+      'tenant-a',
+    );
+
+    const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM webhook_deliveries
+      WHERE event_id = ${eventId}::uuid`;
+    expect(Number(rows[0].count)).toBe(0);
+  });
+
+  it('should bind replay source events to their original tenant', async () => {
+    const sourceTenantEndpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/tenant-a`,
+      events: ['order.created'],
+      tenantId: 'tenant-a',
+    });
+    const otherTenantEndpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/tenant-b`,
+      events: ['order.created'],
+      tenantId: 'tenant-b',
+    });
+
+    const eventId = await webhookService.sendToTenant(
+      'tenant-a',
+      new TestOrderEvent('ord_replay_tenant_guard'),
+    );
+
+    const result = await adminService.replayEvent(eventId, {
+      endpointIds: [sourceTenantEndpoint.id, otherTenantEndpoint.id],
+      reason: 'tenant boundary replay check',
+    });
+
+    expect(result.deliveriesCreated).toBe(1);
+    expect(result.endpointIds).toEqual([sourceTenantEndpoint.id]);
+
+    await expect(
+      adminService.replayEvent(eventId, {
+        tenantId: 'tenant-b',
+        endpointIds: [otherTenantEndpoint.id],
+        reason: 'cross-tenant replay check',
+      }),
+    ).rejects.toThrow('Webhook event is missing or its payload has been purged');
   });
 
   it('should purge expired webhook payload and response body data', async () => {

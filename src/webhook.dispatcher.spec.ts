@@ -9,7 +9,7 @@ function makeDelivery(overrides: Partial<PendingDelivery> = {}): PendingDelivery
   return {
     id: 'd-1', eventId: 'evt-1', endpointId: 'ep-1', tenantId: null,
     attempts: 0, maxAttempts: 3,
-    url: 'https://example.com/hook',
+    url: 'https://1.1.1.1/hook',
     secret: Buffer.from('a'.repeat(32)).toString('base64'),
     additionalSecrets: [],
     eventType: 'order.created',
@@ -41,7 +41,7 @@ describe('WebhookDispatcher', () => {
 
     expect(httpClient.post).toHaveBeenCalledTimes(1);
     const [url, headers, body, timeout] = httpClient.post.mock.calls[0];
-    expect(url).toBe('https://example.com/hook');
+    expect(url).toBe('https://1.1.1.1/hook');
     expect(headers['webhook-id']).toBe('evt-1');
     expect(headers['webhook-signature']).toMatch(/^v1,.+$/);
     expect(headers['webhook-timestamp']).toBeDefined();

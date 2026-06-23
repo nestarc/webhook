@@ -32,10 +32,14 @@ export class WebhookDispatcher {
 
   async dispatch(delivery: PendingDelivery): Promise<DeliveryResult> {
     const parsedUrl = this.parseDeliveryUrl(delivery.url);
+    let resolvedIpAddresses: string[] | undefined;
 
     // DNS rebinding defense — validate resolved IPs before every dispatch
     if (!this.allowPrivateUrls) {
-      await resolveAndValidateHost(parsedUrl.hostname, delivery.url);
+      resolvedIpAddresses = await resolveAndValidateHost(
+        parsedUrl.hostname,
+        delivery.url,
+      );
     }
 
     const body = JSON.stringify({
@@ -51,7 +55,9 @@ export class WebhookDispatcher {
       [delivery.secret, ...delivery.additionalSecrets],
     );
 
-    return this.httpClient.post(delivery.url, headers, body, this.timeout);
+    return this.httpClient.post(delivery.url, headers, body, this.timeout, {
+      resolvedIpAddresses,
+    });
   }
 
   private parseDeliveryUrl(url: string): URL {
