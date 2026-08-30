@@ -2,7 +2,6 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PrismaClient } from '@prisma/client';
 import {
   WEBHOOK_DELIVERY_REPOSITORY,
   WebhookDeliveryRepository,
@@ -24,9 +23,45 @@ class TestOrderEvent extends WebhookEvent {
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgresql://webhook_test:webhook_test@localhost:5433/webhook_test';
 
+interface E2ePrismaClient {
+  $connect(): Promise<void>;
+  $disconnect(): Promise<void>;
+  $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number>;
+  $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number>;
+  $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+}
+
+type PrismaClientConstructor = new (options?: unknown) => E2ePrismaClient;
+
+function createPrismaClient(): E2ePrismaClient {
+  const prismaMajor = process.env.WEBHOOK_E2E_PRISMA_MAJOR ?? '7';
+
+  if (prismaMajor === '6') {
+    process.env.DATABASE_URL ??= DATABASE_URL;
+    const { PrismaClient } = require('@prisma/client') as {
+      PrismaClient: PrismaClientConstructor;
+    };
+    return new PrismaClient();
+  }
+
+  if (prismaMajor === '7') {
+    const { PrismaPg } = require('@prisma/adapter-pg') as {
+      PrismaPg: new (options: { connectionString: string }) => unknown;
+    };
+    const { PrismaClient } = require('./generated/prisma/client') as {
+      PrismaClient: PrismaClientConstructor;
+    };
+    return new PrismaClient({
+      adapter: new PrismaPg({ connectionString: DATABASE_URL }),
+    });
+  }
+
+  throw new Error(`Unsupported WEBHOOK_E2E_PRISMA_MAJOR=${prismaMajor}`);
+}
+
 describe('Webhook E2E', () => {
   let module: TestingModule;
-  let prisma: PrismaClient;
+  let prisma: E2ePrismaClient;
   let webhookService: WebhookService;
   let adminService: WebhookAdminService;
   let deliveryWorker: WebhookDeliveryWorker;
@@ -41,7 +76,7 @@ describe('Webhook E2E', () => {
 
   beforeAll(async () => {
     // 1. Set up Prisma
-    prisma = new PrismaClient({ datasources: { db: { url: DATABASE_URL } } });
+    prisma = createPrismaClient();
     await prisma.$connect();
 
     // 2. Run migration SQL — strip comments and execute each statement

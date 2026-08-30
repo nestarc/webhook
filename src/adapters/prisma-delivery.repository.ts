@@ -665,7 +665,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
             payload_purged_at = ${now}
         WHERE ${eventPayloadRetentionDays}::int IS NOT NULL
           AND ev.payload_purged_at IS NULL
-          AND ev.created_at <= ${now} - (${eventPayloadRetentionDays}::text || ' days')::interval
+          AND ev.created_at <= ${now}::timestamptz - (${eventPayloadRetentionDays}::text || ' days')::interval
           AND NOT EXISTS (
             SELECT 1
             FROM webhook_deliveries d
@@ -680,7 +680,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
         WHERE ${deliveryResponseBodyRetentionDays}::int IS NOT NULL
           AND d.response_body IS NOT NULL
           AND d.completed_at IS NOT NULL
-          AND d.completed_at <= ${now} - (${deliveryResponseBodyRetentionDays}::text || ' days')::interval
+          AND d.completed_at <= ${now}::timestamptz - (${deliveryResponseBodyRetentionDays}::text || ' days')::interval
         RETURNING d.id
       ),
       attempt_bodies AS (
@@ -689,7 +689,7 @@ export class PrismaDeliveryRepository implements WebhookDeliveryRepository {
             response_body_truncated = FALSE
         WHERE ${attemptResponseBodyRetentionDays}::int IS NOT NULL
           AND a.response_body IS NOT NULL
-          AND a.created_at <= ${now} - (${attemptResponseBodyRetentionDays}::text || ' days')::interval
+          AND a.created_at <= ${now}::timestamptz - (${attemptResponseBodyRetentionDays}::text || ' days')::interval
         RETURNING a.id
       )
       SELECT

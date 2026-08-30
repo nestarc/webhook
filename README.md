@@ -43,6 +43,63 @@ npm install @nestarc/webhook
 npm install @nestjs/common @nestjs/core @nestjs/schedule @prisma/client
 ```
 
+Supported peer ranges are NestJS 10 or 11, `@nestjs/schedule` 4 or 5, and
+Prisma Client 5, 6, or 7. The CI compatibility lanes keep the established
+NestJS 10.4.20/Prisma 6.19.3 path and separately exercise the modern
+NestJS 11.2.1/Prisma 7.10.0 path against PostgreSQL 16. A packed-artifact
+consumer also installs the modern tuple with `--strict-peer-deps` and verifies
+artifact integrity/provenance, public types, and CommonJS runtime loading.
+The Prisma 6 lane deliberately retains `prisma-client-js` and native
+`new PrismaClient()` construction; only the Prisma 7 lane uses a driver adapter.
+
+### Prisma 7 client setup
+
+Prisma 7 requires a database driver adapter. Configure and generate the client
+in your application, then pass that client to `WebhookModule`; this package
+does not create or own your Prisma connection.
+
+```bash
+npm install @prisma/adapter-pg pg
+```
+
+```prisma
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+```
+
+```typescript
+// prisma.config.ts
+import { defineConfig, env } from 'prisma/config';
+
+export default defineConfig({
+  schema: 'prisma/schema.prisma',
+  datasource: { url: env('DATABASE_URL') },
+});
+```
+
+```typescript
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from './generated/prisma/client';
+
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL!,
+});
+const prisma = new PrismaClient({ adapter });
+
+WebhookModule.forRoot({ prisma });
+```
+
+Prisma 5 and 6 consumers can keep their existing client construction. The
+default webhook repositories only require Prisma's raw-query and transaction
+surface, so applications may also provide a compatible custom Prisma service.
+
 ## Database Setup
 
 Run the migration SQL against your PostgreSQL database:

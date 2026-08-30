@@ -1,0 +1,10 @@
+// Preserve the pre-Prisma-7 consumer path: the classic generator writes to
+// @prisma/client and the E2E suite constructs PrismaClient without an adapter.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

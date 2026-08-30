@@ -373,6 +373,7 @@ describe('PrismaDeliveryRepository', () => {
         .replace(/\s+/g, ' ');
       expect(sql).toContain("payload = '{}'::jsonb");
       expect(sql).toContain('payload_purged_at');
+      expect(sql.match(/::timestamptz/g)).toHaveLength(3);
       expect(sql).toContain("status IN ('PENDING', 'SENDING')");
       expect(sql).toContain('response_body = NULL');
     });
