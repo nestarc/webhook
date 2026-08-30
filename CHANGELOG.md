@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-08-30
+
+### Added
+
+- Prisma 7 support for the default PostgreSQL repositories, including an exact
+  Prisma 7.10.0 + NestJS 11.2.1 real-database CI lane.
+- A packed-artifact consumer gate that installs `@nestarc/webhook` with exact
+  NestJS 11.2.1 and Prisma 7.10.0 under `--strict-peer-deps`, then verifies
+  artifact integrity/provenance, public types, and CommonJS runtime loading.
+- A Prisma 6.19.3 legacy schema and real-database CI lane so the existing
+  NestJS 10/11 + Prisma 6 support remains independently verified with the
+  classic `prisma-client-js` generator and native `new PrismaClient()` runtime.
+
+### Changed
+
+- Expanded the `@prisma/client` peer range to include `^7.0.0`.
+- Migrated the Prisma 7 E2E harness to the `prisma-client` generator, explicit
+  output, CommonJS module format, `prisma.config.ts`, and `@prisma/adapter-pg`.
+- Pinned the modern development evidence tuple to NestJS 11.2.1 and Prisma
+  7.10.0; CI continues to install exact legacy versions in isolated cells.
+
+### Fixed
+
+- Explicitly cast retention cutoff parameters to `timestamptz`. Prisma 7's
+  PostgreSQL driver adapter otherwise allowed PostgreSQL to infer the date
+  parameter as an interval, causing retention purge queries to fail with
+  error `42883`.
+
 ## [0.13.0] - 2026-06-23
 
 ### Added
@@ -372,7 +400,9 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
-[Unreleased]: https://github.com/nestarc/webhook/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/nestarc/webhook/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/nestarc/webhook/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/nestarc/webhook/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/nestarc/webhook/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/nestarc/webhook/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nestarc/webhook/compare/v0.10.0...v0.11.0
