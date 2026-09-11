@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-09-11
+
 ### Fixed
 
 - Persist `correlationId` without requiring an `idempotencyKey` for all publish methods. Event repository methods accept optional correlation metadata while remaining compatible with existing implementations.

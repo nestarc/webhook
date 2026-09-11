@@ -1,6 +1,6 @@
 {
   "name": "@nestarc/webhook",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Outbound webhooks for NestJS and PostgreSQL: HMAC signing, retries, circuit breaker, delivery logs, and tenant-aware fan-out",
   "author": "nestarc",
   "license": "MIT",

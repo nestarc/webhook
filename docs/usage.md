@@ -1,6 +1,6 @@
 # Using @nestarc/webhook
 
-This is the consumer contract for the source checkout based on **0.13.1**. Changes listed under [Unreleased](../CHANGELOG.md#unreleased) require a build from this checkout until the next npm release. In published 0.13.1, correlation IDs are only stored with idempotency keys, replay always uses five attempts, and manual retry does not guard against purged payloads.
+This is the consumer contract for **0.13.2**. See the [0.13.2 changes](../CHANGELOG.md#0132---2026-09-11); if that version is not yet available on npm, use a locally packed build. In 0.13.1, correlation IDs are only stored with idempotency keys, replay always uses five attempts, and manual retry does not guard against purged payloads.
 
 Start with the [README](../README.md) and the [executable example](../examples/quick-start/README.md). Online references: [usage documentation](https://nestarc.dev/packages/webhook/) and [API reference](https://nestarc.dev/api/webhook/). Use the types in your installed package when they differ from an unreleased example.
 

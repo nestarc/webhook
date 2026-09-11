@@ -6,7 +6,7 @@ Send signed webhook events from a NestJS application using PostgreSQL as the del
 
 [Documentation](https://nestarc.dev/packages/webhook/) · [API Reference](https://nestarc.dev/api/webhook/) · [npm](https://www.npmjs.com/package/@nestarc/webhook) · [Changelog](./CHANGELOG.md) · [Security policy](./SECURITY.md)
 
-> **Version scope:** This README follows the current source. The install command pins `0.13.1`; changes listed under [Unreleased](./CHANGELOG.md#unreleased) require a build from this checkout until the next release. Before `1.0.0`, minor releases may contain breaking changes; review the changelog and pin exact versions.
+> **Version scope:** This README describes `0.13.2`; see its [changes](./CHANGELOG.md#0132---2026-09-11). If that version is not yet available on npm, use a locally packed build from this checkout. Before `1.0.0`, minor releases may contain breaking changes; review the changelog and pin exact versions.
 
 ## Contents
 
@@ -41,7 +41,7 @@ You need an existing NestJS application, a PostgreSQL database, and a running AP
 Install the package into your application:
 
 ```bash
-npm install --save-exact @nestarc/webhook@0.13.1
+npm install --save-exact @nestarc/webhook@0.13.2
 ```
 
 Keep existing compatible NestJS and Prisma dependencies. For a NestJS 11 / Prisma 7 setup, the following exact versions are covered by the repository's compatibility checks:
@@ -255,7 +255,7 @@ await webhooks.sendToTenant('tenant_123', event, {
 });
 ```
 
-The default adapter deduplicates by tenant, event type, and idempotency key. Reusing a key returns the original event ID without updating its payload, correlation ID, or endpoint selection. Producer idempotency does not prevent duplicate HTTP requests. Correlation IDs are stored for diagnostics and are not added to the delivered payload or headers. Independent `correlationId` persistence, without an idempotency key, is an [Unreleased fix](./CHANGELOG.md#unreleased).
+The default adapter deduplicates by tenant, event type, and idempotency key. Reusing a key returns the original event ID without updating its payload, correlation ID, or endpoint selection. Producer idempotency does not prevent duplicate HTTP requests. Correlation IDs are stored for diagnostics and are not added to the delivered payload or headers. Independent `correlationId` persistence, without an idempotency key, is supported from [0.13.2](./CHANGELOG.md#0132---2026-09-11).
 
 Delivery uses retries with a finite attempt budget. `FOR UPDATE SKIP LOCKED` prevents workers from claiming the same pending row concurrently, but it does not guarantee exactly-once delivery. If a receiver processes a request and the worker fails before saving success, the request can be sent again. A receiver must deduplicate `webhook-id` within its own processing scope and make its business side effects idempotent. Delivery can still end in `FAILED` after permanent errors or exhausted attempts, and ordering between events is not guaranteed.
 
@@ -363,7 +363,7 @@ WebhookModule.forRoot({
 });
 ```
 
-Payload redaction changes what the receiver gets. Purging clears stored content; it does not delete the event/delivery metadata or idempotency key. Purged payloads cannot be replayed. The [Unreleased retry guard](./CHANGELOG.md#unreleased) also rejects manual retries of deliveries whose event payload has been purged.
+Payload redaction changes what the receiver gets. Purging clears stored content; it does not delete the event/delivery metadata or idempotency key. Purged payloads cannot be replayed. From [0.13.2](./CHANGELOG.md#0132---2026-09-11), manual retries also reject deliveries whose event payload has been purged.
 
 ### Custom adapters
 
@@ -442,9 +442,9 @@ const replay = await deliveryAdmin.replayEvent(eventId, {
 });
 ```
 
-Manual retry requeues a failed delivery row, preserving its queued destination, secrets, and attempt count, and grants at least one additional attempt. It returns `false` if the delivery is not eligible. Bulk retry reports `matched`, `retried`, and `skipped`. With the [Unreleased retry guard](./CHANGELOG.md#unreleased), purged event payloads are ineligible for both paths.
+Manual retry requeues a failed delivery row, preserving its queued destination, secrets, and attempt count, and grants at least one additional attempt. It returns `false` if the delivery is not eligible. Bulk retry reports `matched`, `retried`, and `skipped`. From [0.13.2](./CHANGELOG.md#0132---2026-09-11), purged event payloads are ineligible for both paths.
 
-Replay creates **new delivery rows** for the existing event ID using currently active matching endpoints and their current destination/secret snapshots. It preserves the source event's tenant scope; `tenantId` further restricts selection and cannot move an event into another tenant. A missing/purged event or an incompatible tenant filter throws; no matching endpoints returns `deliveriesCreated: 0`. Replay uses the configured `delivery.maxRetries` in the [Unreleased fix](./CHANGELOG.md#unreleased); released `0.13.1` uses five attempts.
+Replay creates **new delivery rows** for the existing event ID using currently active matching endpoints and their current destination/secret snapshots. It preserves the source event's tenant scope; `tenantId` further restricts selection and cannot move an event into another tenant. A missing/purged event or an incompatible tenant filter throws; no matching endpoints returns `deliveriesCreated: 0`. Replay uses the configured `delivery.maxRetries` from [0.13.2](./CHANGELOG.md#0132---2026-09-11); `0.13.1` uses five attempts.
 
 Replay retains `webhook-id`, so a receiver that already processed that event may intentionally ignore it as a duplicate. Use a new business event if a separate processing operation is intended.
 

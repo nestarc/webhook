@@ -2,7 +2,7 @@
 
 Baseline: `@nestarc/webhook` 0.13.1, commit `60b2725`. Scope fixed on 2026-09-11 from the README audit and approved improvement request.
 
-This file tracks implementation and verification. It is not the package usage contract; use [usage.md](./usage.md), the [README](../README.md), and the installed package's types. Source fixes are unreleased until a new package version is published.
+This file tracks implementation and verification. It is not the package usage contract; use [usage.md](./usage.md), the [README](../README.md), and the installed package's types. The changes are assigned to **0.13.2**; a version bump alone does not publish the package.
 
 ## Fixed scope
 
