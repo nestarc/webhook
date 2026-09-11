@@ -1,5 +1,7 @@
 # Backend Evaluation Report
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 - Date: 2026-04-11
 - Repository: `@nestarc/webhook`
 - Scope: architecture, security, reliability, operations, test readiness

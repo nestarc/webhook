@@ -1,5 +1,7 @@
 # Worker Engine Capacity Implementation Plan
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](../../usage.md) and installed package types.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add tunable worker delivery capacity, worker observer metrics, backlog diagnostics, and delivery hot-path indexes while preserving the current default polling behavior.

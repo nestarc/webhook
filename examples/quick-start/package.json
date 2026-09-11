@@ -1,0 +1,29 @@
+{
+  "name": "webhook-quick-start",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "generate": "prisma generate",
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run generate && npm run build && node dist/main.js"
+  },
+  "engines": {
+    "node": "^20.19 || ^22.12 || >=24.0"
+  },
+  "dependencies": {
+    "@nestarc/webhook": "0.13.1",
+    "@nestjs/common": "11.2.1",
+    "@nestjs/core": "11.2.1",
+    "@nestjs/schedule": "5.0.1",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "pg": "8.23.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "prisma": "7.10.0",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,5 +1,7 @@
 # INSERT tenant_id UUID 캐스트 누락
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 ## 문제
 
 `tenant_id` 컬럼이 UUID 타입인 DB에서 INSERT 시 타입 불일치 에러가 발생한다.

@@ -1,5 +1,7 @@
 # @nestarc/webhook — 핸드오버 문서
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 > **작성일**: 2026-04-11
 > **목적**: 다음 세션(Claude Code 등)에서 바로 구현을 시작할 수 있도록 설계 결정사항과 컨텍스트를 정리
 > **선행 패키지**: `@nestarc/tenancy` (published), `@nestarc/idempotency` v0.1.3 (published), `@nestarc/outbox` (설계 완료)

@@ -1,5 +1,7 @@
 # Webhook 4xx Retry Policy Implementation Plan
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](../../usage.md) and installed package types.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop retrying permanent customer endpoint 4xx responses, while preserving retries for transient failures such as network errors, 5xx, 408, 409, 425, and 429.

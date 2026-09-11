@@ -1,5 +1,7 @@
 # Early Delivery Failure Hooks Design
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](../../usage.md) and installed package types.
+
 ## Goal
 
 Add engine-level hooks that let the platform observe delivery failures before retry exhaustion, without changing the terminal-only meaning of `onDeliveryFailed` or the active-to-inactive transition meaning of `onEndpointDisabled`.

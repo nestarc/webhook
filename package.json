@@ -1,14 +1,23 @@
 {
   "name": "@nestarc/webhook",
   "version": "0.13.1",
-  "description": "Outbound webhook delivery for NestJS — HMAC signing, exponential retry, circuit breaker, delivery logs, fan-out, Standard Webhooks compatible",
+  "description": "Outbound webhooks for NestJS and PostgreSQL: HMAC signing, retries, circuit breaker, delivery logs, and tenant-aware fan-out",
   "author": "nestarc",
   "license": "MIT",
+  "homepage": "https://nestarc.dev/packages/webhook/",
+  "bugs": {
+    "url": "https://github.com/nestarc/webhook/issues"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "src/sql"
+    "src/sql",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "docs/usage.md",
+    "examples/quick-start",
+    "llms.txt"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -17,6 +26,7 @@
     "test:e2e": "jest --config jest.e2e.config.js --runInBand",
     "test:cov": "jest --coverage --runInBand",
     "test:consumer:modern": "npm run build && node scripts/verify-modern-consumer.mjs",
+    "test:consumer:quick-start": "npm run build && node scripts/verify-quick-start.mjs",
     "lint": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:generate:legacy": "prisma generate --schema=test/e2e/schema-v6.prisma",
@@ -67,6 +77,10 @@
     "hmac",
     "retry",
     "circuit-breaker",
-    "standard-webhooks"
+    "standard-webhooks",
+    "postgresql",
+    "prisma",
+    "typescript",
+    "multi-tenant"
   ]
 }

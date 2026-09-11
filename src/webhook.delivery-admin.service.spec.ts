@@ -91,7 +91,24 @@ describe('WebhookDeliveryAdminService', () => {
     expect(repo.replayEvent).toHaveBeenCalledWith('event-1', {
       tenantId: 'tenant_123',
       reason: 'customer support replay',
-    });
+    }, 5);
+  });
+
+  it('passes the configured total attempt budget to event replay', async () => {
+    const repo = {
+      ...createDeliveryRepo(),
+      replayEvent: jest.fn().mockResolvedValueOnce({
+        eventId: 'event-1', deliveriesCreated: 0, endpointIds: [],
+      }),
+    };
+    const service = new WebhookDeliveryAdminService(
+      repo as unknown as WebhookDeliveryRepository,
+      { prisma: {}, delivery: { maxRetries: 8 } },
+    );
+
+    await service.replayEvent('event-1');
+
+    expect(repo.replayEvent).toHaveBeenCalledWith('event-1', undefined, 8);
   });
 
   it('throws a clear error when replay is unsupported by the repository', async () => {

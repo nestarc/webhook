@@ -60,6 +60,7 @@ export interface DeliveryLogFilters {
 }
 
 export interface RetryDeliveryOptions {
+  /** Metadata for custom repositories. The built-in Prisma adapter does not persist this value. */
   reason?: string;
 }
 
@@ -68,14 +69,17 @@ export interface RetryFailedDeliveriesFilters extends DeliveryLogFilters {
 }
 
 export interface RetryFailedDeliveriesResult {
+  /** Failed deliveries selected by the batch, excluding rows locked by another operation. */
   matched: number;
   retried: number;
+  /** Selected deliveries not retried, including events whose payload was purged. */
   skipped: number;
 }
 
 export interface ReplayEventOptions {
   endpointIds?: string[];
   tenantId?: string;
+  /** Metadata for custom repositories. The built-in Prisma adapter does not persist this value. */
   reason?: string;
 }
 

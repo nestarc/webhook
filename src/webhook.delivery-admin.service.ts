@@ -1,6 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { WEBHOOK_DELIVERY_REPOSITORY } from './webhook.constants';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import {
+  DEFAULT_MAX_RETRIES,
+  WEBHOOK_DELIVERY_REPOSITORY,
+  WEBHOOK_MODULE_OPTIONS,
+} from './webhook.constants';
 import { WebhookDeliveryRepository } from './ports/webhook-delivery.repository';
+import { WebhookModuleOptions } from './interfaces/webhook-options.interface';
 import {
   DeliveryAttemptRecord,
   DeliveryLogFilters,
@@ -17,6 +22,9 @@ export class WebhookDeliveryAdminService {
   constructor(
     @Inject(WEBHOOK_DELIVERY_REPOSITORY)
     private readonly deliveryRepo: WebhookDeliveryRepository,
+    @Optional()
+    @Inject(WEBHOOK_MODULE_OPTIONS)
+    private readonly options?: WebhookModuleOptions,
   ) {}
 
   async getDeliveryLogs(
@@ -58,6 +66,10 @@ export class WebhookDeliveryAdminService {
       throw new Error('WebhookDeliveryRepository does not support event replay');
     }
 
-    return this.deliveryRepo.replayEvent(eventId, options);
+    return this.deliveryRepo.replayEvent(
+      eventId,
+      options,
+      this.options?.delivery?.maxRetries ?? DEFAULT_MAX_RETRIES,
+    );
   }
 }

@@ -170,9 +170,25 @@ jobs:
           retention-days: 14
 
   modern-consumer:
-    name: Strict modern consumer (NestJS 11.2.1 × Prisma 7.10.0)
+    name: Packed consumers (types and first delivery)
     needs: lint
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: webhook_test
+          POSTGRES_PASSWORD: webhook_test
+          POSTGRES_DB: webhook_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U webhook_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://webhook_test:webhook_test@localhost:5433/webhook_test
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -188,6 +204,9 @@ jobs:
 
       - name: Verify packed artifact in a strict consumer
         run: npm run test:consumer:modern
+
+      - name: Verify executable quick start against PostgreSQL and HTTP
+        run: npm run test:consumer:quick-start
 
   pack:
     name: Pack (publish dry-run)

@@ -1,5 +1,7 @@
 # Worker Separation Analysis
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 비동기 배달 워커를 API 프로세스에서 분리하기 위한 분석 및 구현 방안.
 
 ---

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Persist `correlationId` without requiring an `idempotencyKey` for all publish methods. Event repository methods accept optional correlation metadata while remaining compatible with existing implementations.
+- Use the module's configured `delivery.maxRetries` total attempt budget for event replay instead of always using five attempts. Custom replay repositories receive the budget as an optional third parameter.
+- Prevent individual and bulk manual retries from requeueing events whose payload has been purged. Serialize retry, replay, and payload retention on event rows so concurrent cleanup cannot erase newly queued payloads.
+
+### Added
+
+- An executable NestJS/Prisma 7 consumer example with an isolated PostgreSQL schema, raw-body signature verification, receiver deduplication, and delivery/attempt assertions. CI verifies it from the packed package.
+- A version-aware consumer contract, AI navigation index, and packaged changelog/security/usage/example documentation.
+- Public `WebhookHttpClientRequestOptions` type export for custom HTTP adapters implementing prevalidated address handling.
+
+### Documentation
+
+- Correct delivery claims, queue-time secret rotation snapshots, response body limits, transport details, tenant selection, and timestamp freshness versus deduplication.
+- Complete CommonJS Prisma 7 setup and ordered upgrade migrations; distinguish latest delivery state from per-attempt history and total attempts from retries.
+- Clarify that the built-in Prisma adapter does not persist the optional administrative `reason` field, and retain it for custom adapters.
+- Link the official usage/API references, improve package discovery metadata, and mark historical design records as non-authoritative.
+
 ## [0.13.1] - 2026-08-30
 
 ### Added

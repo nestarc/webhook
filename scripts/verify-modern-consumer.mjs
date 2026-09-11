@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
+const sourceManifest = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'));
+const packageIdentity = `${sourceManifest.name}@${sourceManifest.version}`;
 const peerBypassEnvironment = new Set(['npm_config_force', 'npm_config_legacy_peer_deps']);
 const falseValues = new Set(['', '0', 'false', 'no', 'off']);
 
@@ -53,11 +55,24 @@ try {
     .update(readFileSync(tarball))
     .digest('base64')}`;
 
-  if (packedArtifact.id !== '@nestarc/webhook@0.13.1' || !packedArtifact.integrity) {
+  if (packedArtifact.id !== packageIdentity || !packedArtifact.integrity) {
     throw new Error('npm pack did not produce the expected versioned artifact identity');
   }
   if (packedArtifact.integrity !== computedIntegrity) {
     throw new Error('npm pack integrity does not match the independently hashed tarball bytes');
+  }
+
+  const packedFiles = new Set(packedArtifact.files.map(({ path }) => path));
+  for (const required of [
+    'README.md', 'CHANGELOG.md', 'SECURITY.md', 'LICENSE', 'docs/usage.md', 'llms.txt',
+    'examples/quick-start/README.md', 'examples/quick-start/package.json',
+    'src/sql/create-webhook-tables.sql', 'src/sql/migrations/v0.9.0.sql',
+    'src/sql/migrations/v0.12.0.sql', 'src/sql/migrations/v0.13.0.sql', 'dist/index.d.ts',
+  ]) {
+    if (!packedFiles.has(required)) throw new Error(`Packed consumer documentation/file missing: ${required}`);
+  }
+  if ([...packedFiles].some((path) => /^examples\/quick-start\/(node_modules|dist|generated)\//.test(path))) {
+    throw new Error('Packed example must not include installed dependencies or generated output');
   }
 
   writeFileSync(
@@ -154,7 +169,7 @@ const webhook = require('@nestarc/webhook');
 const { DEFAULT_USER_AGENT } = require('@nestarc/webhook/dist/webhook.constants');
 const definition = webhook.WebhookModule.forRoot({ prisma: {}, polling: { enabled: false } });
 assert.equal(definition.module, webhook.WebhookModule);
-assert.equal(DEFAULT_USER_AGENT, '@nestarc/webhook/0.13.1');
+assert.equal(DEFAULT_USER_AGENT, ${JSON.stringify(`${sourceManifest.name}/${sourceManifest.version}`)});
 assert.equal(typeof webhook.WebhookService, 'function');
 `,
   );
@@ -162,7 +177,7 @@ assert.equal(typeof webhook.WebhookService, 'function');
 
   const tree = JSON.parse(run('npm', ['ls', '--depth=0', '--json'], consumerRoot));
   const expected = {
-    '@nestarc/webhook': '0.13.1',
+    '@nestarc/webhook': sourceManifest.version,
     '@nestjs/common': '11.2.1',
     '@nestjs/core': '11.2.1',
     '@nestjs/schedule': '5.0.1',
@@ -183,10 +198,10 @@ assert.equal(typeof webhook.WebhookService, 'function');
   );
   if (
     packedManifest.name !== '@nestarc/webhook' ||
-    packedManifest.version !== '0.13.1' ||
+    packedManifest.version !== sourceManifest.version ||
     packedManifest.repository?.url !== 'https://github.com/nestarc/webhook.git'
   ) {
-    throw new Error('Installed webhook artifact identity/provenance does not match this repository');
+    throw new Error('Installed webhook artifact identity/repository metadata does not match this repository');
   }
   if (packedManifest.peerDependencies?.['@prisma/client'] !== '^5.0.0 || ^6.0.0 || ^7.0.0') {
     throw new Error('Packed webhook artifact does not declare the Prisma 7 peer range');
@@ -197,7 +212,7 @@ assert.equal(typeof webhook.WebhookService, 'function');
   );
   const lockedWebhook = consumerLock.packages?.['node_modules/@nestarc/webhook'];
   if (
-    lockedWebhook?.version !== '0.13.1' ||
+    lockedWebhook?.version !== sourceManifest.version ||
     !lockedWebhook.resolved?.startsWith('file:') ||
     lockedWebhook.integrity !== packedArtifact.integrity
   ) {
@@ -212,12 +227,12 @@ assert.equal(typeof webhook.WebhookService, 'function');
       !lockedDependency.resolved?.startsWith('https://registry.npmjs.org/') ||
       !lockedDependency.integrity?.startsWith('sha512-')
     ) {
-      throw new Error(`Consumer lock does not preserve registry provenance for ${name}@${version}`);
+      throw new Error(`Consumer lock does not preserve registry origin/integrity for ${name}@${version}`);
     }
   }
 
   process.stdout.write(
-    `Strict modern consumer passed: @nestarc/webhook@0.13.1 + NestJS 11.2.1 + Prisma 7.10.0; independently verified integrity ${computedIntegrity}; public types and runtime load verified.\n`,
+    `Strict modern consumer passed: ${packageIdentity} + NestJS 11.2.1 + Prisma 7.10.0; independently verified integrity ${computedIntegrity}; packaged documentation, public types and runtime load verified.\n`,
   );
 } finally {
   rmSync(consumerRoot, { recursive: true, force: true });

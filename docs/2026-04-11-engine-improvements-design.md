@@ -1,5 +1,7 @@
 # Engine Improvements Design — v0.4.0
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 작성일: 2026-04-11
 목적: 핸드오버 문서의 엔진 수정 필요 항목 E1, E2, E3을 설계한다.
 

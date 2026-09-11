@@ -1,5 +1,7 @@
 # Engine vs Platform — Handover Document
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 작성일: 2026-04-11
 목적: backend-evaluation-report의 리스크 항목별로, @nestarc/webhook 엔진 수정이 필요한지 vs 플랫폼에서 해결 가능한지를 판정하고, 각각의 구체적인 변경 사항을 기술한다.
 

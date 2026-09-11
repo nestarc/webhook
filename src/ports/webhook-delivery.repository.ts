@@ -50,6 +50,8 @@ export interface WebhookDeliveryRepository {
   /**
    * Creates queued delivery rows inside the provided transaction.
    * No-op when endpointIds is empty.
+   * The built-in adapter snapshots the URL and signing secrets when queued;
+   * secret rotation expiration is evaluated then, not during later attempts.
    */
   createDeliveriesInTransaction(
     tx: WebhookTransaction,
@@ -75,14 +77,21 @@ export interface WebhookDeliveryRepository {
   getDeliveryLogs(endpointId: string, filters?: DeliveryLogFilters): Promise<DeliveryRecord[]>;
   /** @returns attempts sorted by attemptNumber ASC. */
   getDeliveryAttempts(deliveryId: string): Promise<DeliveryAttemptRecord[]>;
+  /** Requeues a failed delivery only while its event payload is retained. */
   retryDelivery(deliveryId: string, options?: RetryDeliveryOptions): Promise<boolean>;
   retryFailedDeliveries?(
     filters: RetryFailedDeliveriesFilters,
     options?: RetryDeliveryOptions,
   ): Promise<RetryFailedDeliveriesResult>;
+  /**
+   * Creates new deliveries for a retained event using the current endpoint snapshots.
+   * maxAttempts is the configured total attempt budget, including the first request.
+   * Adapters should coordinate replay/retry with purge so queued payloads cannot be purged.
+   */
   replayEvent?(
     eventId: string,
     options?: ReplayEventOptions,
+    maxAttempts?: number,
   ): Promise<ReplayEventResult>;
   purgeExpiredData?(
     options: WebhookRetentionOptions,

@@ -167,6 +167,9 @@ jobs:
       - name: Strict modern consumer
         run: npm run test:consumer:modern
 
+      - name: Executable quick-start consumer
+        run: npm run test:consumer:quick-start
+
       - name: Pack (dry run)
         run: npm pack --dry-run
 

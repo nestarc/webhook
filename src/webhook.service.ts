@@ -38,10 +38,17 @@ export class WebhookService {
     this.redaction = options.redaction;
   }
 
+  /**
+   * Publish to active matching endpoints across all tenants.
+   * Returns the saved event ID even when no endpoints match. correlationId is
+   * stored independently of idempotencyKey; duplicate keys return the original
+   * event without creating deliveries or updating its metadata.
+   */
   async send(event: WebhookEvent, options?: WebhookPublishOptions): Promise<string> {
     return this.sendInternal(event, undefined, options);
   }
 
+  /** Publish to active matching endpoints belonging to the specified tenant. */
   async sendToTenant(
     tenantId: string,
     event: WebhookEvent,
@@ -50,6 +57,12 @@ export class WebhookService {
     return this.sendInternal(event, tenantId, options);
   }
 
+  /**
+   * Publish to eligible endpoints among the specified IDs. The built-in repository
+   * requires active endpoints subscribed to the exact event type or literal '*'.
+   * When a tenant ID is provided, endpoint ownership must match that tenant.
+   * Pass publish options as the third argument when no tenant ID is needed.
+   */
   async sendToEndpoints(
     endpointIds: string[],
     event: WebhookEvent,
@@ -178,6 +191,7 @@ export class WebhookService {
         eventType,
         payload,
         tenantId,
+        options,
       );
       return { id, created: true };
     }

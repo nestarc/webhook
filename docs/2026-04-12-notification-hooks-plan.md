@@ -1,5 +1,7 @@
 # Notification Hooks Implementation Plan (`@nestarc/webhook` 0.6.0)
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 > **Goal:** `onDeliveryFailed`, `onEndpointDisabled` 콜백 옵션을 추가하여, 소비자(webhook-platform 등)가 배달 실패/엔드포인트 비활성화 시점에 커스텀 로직을 실행할 수 있게 한다.
 
 **Spec:** `webhook-platform/docs/superpowers/specs/2026-04-12-failure-notifications-design.md` Phase A 참조

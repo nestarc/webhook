@@ -12,6 +12,7 @@ import { WebhookAdminService } from '../../src/webhook.admin.service';
 import { WebhookDeliveryWorker } from '../../src/webhook.delivery-worker';
 import { WebhookEvent } from '../../src/webhook.event';
 import { WebhookSigner } from '../../src/webhook.signer';
+import { PrismaDeliveryRepository } from '../../src/adapters/prisma-delivery.repository';
 
 class TestOrderEvent extends WebhookEvent {
   static readonly eventType = 'order.created';
@@ -23,12 +24,19 @@ class TestOrderEvent extends WebhookEvent {
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgresql://webhook_test:webhook_test@localhost:5433/webhook_test';
 
-interface E2ePrismaClient {
-  $connect(): Promise<void>;
-  $disconnect(): Promise<void>;
+interface E2ePrismaTransaction {
   $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number>;
   $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number>;
   $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+}
+
+interface E2ePrismaClient extends E2ePrismaTransaction {
+  $connect(): Promise<void>;
+  $disconnect(): Promise<void>;
+  $transaction<T>(
+    fn: (tx: E2ePrismaTransaction) => Promise<T>,
+    options?: { isolationLevel?: string; timeout?: number },
+  ): Promise<T>;
 }
 
 type PrismaClientConstructor = new (options?: unknown) => E2ePrismaClient;
@@ -73,6 +81,57 @@ describe('Webhook E2E', () => {
     body: string;
   }>;
   let serverResponseStatus: number;
+
+  // Execute real repository SQL, then hold its transaction immediately before
+  // commit. Competing operations must handle uncommitted row changes correctly.
+  function holdRepositoryCommit() {
+    let release!: () => void;
+    let reportReady!: (pid: number) => void;
+    let reportFailure!: (error: unknown) => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const ready = new Promise<number>((resolve, reject) => {
+      reportReady = resolve;
+      reportFailure = reject;
+    });
+    const repository = new PrismaDeliveryRepository({
+      $transaction: async <T>(
+        fn: (tx: E2ePrismaTransaction) => Promise<T>,
+        options?: { isolationLevel?: string },
+      ) => {
+        try {
+          return await prisma.$transaction(async (tx) => {
+            const result = await fn(tx);
+            const [state] = await tx.$queryRaw<Array<{ pid: number; isolation: string }>>`
+              SELECT pg_backend_pid() AS pid,
+                current_setting('transaction_isolation') AS isolation`;
+            expect(state.isolation).toBe('read committed');
+            reportReady(state.pid);
+            await released;
+            return result;
+          }, { ...options, timeout: 10_000 });
+        } catch (error) {
+          reportFailure(error);
+          throw error;
+        }
+      },
+    });
+    return { repository, ready, release };
+  }
+
+  async function expectBlockedTransaction(blockerPid: number): Promise<void> {
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const [state] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_stat_activity activity
+          WHERE ${blockerPid}::int = ANY(pg_blocking_pids(activity.pid))
+        ) AS blocked`;
+      if (state.blocked) return;
+      // Retry the observed lock condition; elapsed time alone never proves a race.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error('Expected a PostgreSQL transaction waiting on the held event lock');
+  }
 
   beforeAll(async () => {
     // 1. Set up Prisma
@@ -540,6 +599,47 @@ describe('Webhook E2E', () => {
     expect(Number(rows[0].count)).toBe(1);
   });
 
+  it.each(['send', 'sendToTenant', 'sendToEndpoints'] as const)(
+    'should persist correlationId without idempotencyKey through %s',
+    async (method) => {
+      const endpoint = await adminService.createEndpoint({
+        url: `http://localhost:${mockServerPort}/webhook`,
+        events: ['order.created'],
+        tenantId: 'correlation-tenant',
+      });
+      const options = { correlationId: 'shared-trace-without-idempotency' };
+      const publish = () => {
+        const event = new TestOrderEvent('ord_correlation_only');
+        if (method === 'sendToTenant') {
+          return webhookService.sendToTenant('correlation-tenant', event, options);
+        }
+        if (method === 'sendToEndpoints') {
+          return webhookService.sendToEndpoints([endpoint.id], event, options);
+        }
+        return webhookService.send(event, options);
+      };
+
+      const firstId = await publish();
+      const secondId = await publish();
+      expect(secondId).not.toBe(firstId);
+      const rows = await prisma.$queryRaw<Array<{
+        correlation_id: string | null;
+        idempotency_key: string | null;
+      }>>`
+        SELECT correlation_id, idempotency_key FROM webhook_events
+        WHERE id IN (${firstId}::uuid, ${secondId}::uuid)`;
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row).toEqual({
+          correlation_id: options.correlationId,
+          idempotency_key: null,
+        });
+      }
+      await deliveryWorker.poll();
+      expect(receivedRequests).toHaveLength(2);
+    },
+  );
+
   it('should support bulk retry of failed deliveries', async () => {
     const endpoint = await adminService.createEndpoint({
       url: `http://localhost:${mockServerPort}/webhook`,
@@ -567,6 +667,41 @@ describe('Webhook E2E', () => {
     expect(Number(rows[0].count)).toBe(2);
   });
 
+  it('should skip purged payloads in manual and bulk retry while retrying retained payloads', async () => {
+    const endpoint = await adminService.createEndpoint({
+      url: `http://localhost:${mockServerPort}/webhook`,
+      events: ['order.created'],
+    });
+    const expiredEventId = await webhookService.send(new TestOrderEvent('ord_expired'));
+    const retainedEventId = await webhookService.send(new TestOrderEvent('ord_retained'));
+    serverResponseStatus = 400;
+    await deliveryWorker.poll();
+    await prisma.$executeRaw`
+      UPDATE webhook_events SET created_at = NOW() - INTERVAL '30 days'
+      WHERE id = ${expiredEventId}::uuid`;
+    expect(await deliveryRepo.purgeExpiredData!({ eventPayloadRetentionDays: 7 }))
+      .toMatchObject({ eventsPurged: 1 });
+
+    const logs = await adminService.getDeliveryLogs(endpoint.id);
+    const expiredDelivery = logs.find((log) => log.eventId === expiredEventId)!;
+    expect(await adminService.retryDelivery(expiredDelivery.id)).toBe(false);
+    expect(await adminService.retryFailedDeliveries({ endpointId: endpoint.id }))
+      .toEqual({ matched: 2, retried: 1, skipped: 1 });
+
+    const rows = await prisma.$queryRaw<Array<{ event_id: string; status: string }>>`
+      SELECT event_id, status FROM webhook_deliveries
+      WHERE endpoint_id = ${endpoint.id}::uuid`;
+    expect(rows).toEqual(expect.arrayContaining([
+      { event_id: expiredEventId, status: 'FAILED' },
+      { event_id: retainedEventId, status: 'PENDING' },
+    ]));
+    receivedRequests = [];
+    serverResponseStatus = 200;
+    await deliveryWorker.poll();
+    expect(receivedRequests).toHaveLength(1);
+    expect(JSON.parse(receivedRequests[0].body).data.orderId).toBe('ord_retained');
+  });
+
   it('should replay an event to active matching endpoints', async () => {
     await adminService.createEndpoint({
       url: `http://localhost:${mockServerPort}/webhook`,
@@ -584,6 +719,11 @@ describe('Webhook E2E', () => {
     expect(result.eventId).toBe(eventId);
     expect(result.deliveriesCreated).toBe(1);
     expect(result.endpointIds).toHaveLength(1);
+
+    const replayed = await prisma.$queryRaw<Array<{ max_attempts: number }>>`
+      SELECT max_attempts FROM webhook_deliveries
+      WHERE event_id = ${eventId}::uuid AND status = 'PENDING'`;
+    expect(replayed).toEqual([{ max_attempts: 3 }]);
 
     await deliveryWorker.poll();
     expect(receivedRequests).toHaveLength(2);
@@ -686,6 +826,112 @@ describe('Webhook E2E', () => {
     expect(rows[0].payload).toEqual({});
     expect(rows[0].payload_purged_at).toBeInstanceOf(Date);
     expect(rows[0].response_body).toBeNull();
+  });
+
+  describe('retention concurrency', () => {
+    type RequeueOperation = 'retry' | 'bulk retry' | 'replay';
+    const operations: RequeueOperation[] = ['retry', 'bulk retry', 'replay'];
+
+    async function failedDelivery() {
+      const endpoint = await adminService.createEndpoint({
+        url: `http://localhost:${mockServerPort}/webhook`,
+        events: ['order.created'],
+      });
+      const eventId = await webhookService.send(new TestOrderEvent('ord_retention_race'));
+      serverResponseStatus = 400;
+      await deliveryWorker.poll();
+      const [delivery] = await adminService.getDeliveryLogs(endpoint.id);
+      expect(delivery.status).toBe('FAILED');
+      return { eventId, endpointId: endpoint.id, deliveryId: delivery.id };
+    }
+
+    function requeue(
+      repository: WebhookDeliveryRepository,
+      operation: RequeueOperation,
+      fixture: Awaited<ReturnType<typeof failedDelivery>>,
+    ): Promise<unknown> {
+      if (operation === 'retry') return repository.retryDelivery(fixture.deliveryId);
+      if (operation === 'bulk retry') {
+        return repository.retryFailedDeliveries!({ endpointId: fixture.endpointId });
+      }
+      return repository.replayEvent!(fixture.eventId, undefined, 3);
+    }
+
+    it.each(operations)('should not queue a purged payload when retention wins against %s', async (operation) => {
+      const fixture = await failedDelivery();
+      const held = holdRepositoryCommit();
+      const purging = held.repository.purgeExpiredData(
+        { eventPayloadRetentionDays: 0 }, new Date(Date.now() + 1000),
+      );
+      // Attach rejection handling before another transaction is allowed to wait.
+      const purgeResult = purging.then((value) => ({ value }), (error: unknown) => ({ error }));
+      let competing!: Promise<{ value: unknown; error?: never } | { error: unknown; value?: never }>;
+      try {
+        const pid = await held.ready;
+        competing = requeue(deliveryRepo, operation, fixture)
+          .then((value) => ({ value }), (error: unknown) => ({ error }));
+        if (operation === 'bulk retry') {
+          // Bulk retry skips the event lock instead of waiting for retention.
+          expect(await competing).toEqual({ value: { matched: 0, retried: 0, skipped: 0 } });
+        } else {
+          await expectBlockedTransaction(pid);
+        }
+      } finally {
+        held.release();
+        expect(await purgeResult).toMatchObject({ value: { eventsPurged: 1 } });
+      }
+
+      const result = await competing;
+      if (operation === 'retry') expect(result).toEqual({ value: false });
+      if (operation === 'replay') {
+        expect(result.error).toBeInstanceOf(Error);
+        expect((result.error as Error).message)
+          .toBe('Webhook event is missing or its payload has been purged');
+      }
+      const [state] = await prisma.$queryRaw<Array<{
+        payload_purged_at: Date | null; queued: bigint;
+      }>>`
+        SELECT ev.payload_purged_at,
+          (SELECT COUNT(*) FROM webhook_deliveries d
+           WHERE d.event_id = ev.id AND d.status IN ('PENDING', 'SENDING')) AS queued
+        FROM webhook_events ev WHERE ev.id = ${fixture.eventId}::uuid`;
+      expect(state.payload_purged_at).toBeInstanceOf(Date);
+      expect(Number(state.queued)).toBe(0);
+    });
+
+    it.each(operations)('should retain the payload when %s wins against retention', async (operation) => {
+      const fixture = await failedDelivery();
+      const held = holdRepositoryCommit();
+      const requeueResult = requeue(held.repository, operation, fixture)
+        .then((value) => ({ value }), (error: unknown) => ({ error }));
+      try {
+        await held.ready;
+        // Retention observes the old FAILED row but must skip its locked event.
+        expect(await deliveryRepo.purgeExpiredData!(
+          { eventPayloadRetentionDays: 0 }, new Date(Date.now() + 1000),
+        )).toMatchObject({ eventsPurged: 0 });
+      } finally {
+        held.release();
+        expect(await requeueResult).not.toHaveProperty('error');
+      }
+      // After commit, the queued delivery also protects its retained event.
+      expect(await deliveryRepo.purgeExpiredData!(
+        { eventPayloadRetentionDays: 0 }, new Date(Date.now() + 1000),
+      )).toMatchObject({ eventsPurged: 0 });
+      const [event] = await prisma.$queryRaw<Array<{
+        payload: { orderId: string }; payload_purged_at: Date | null;
+      }>>`
+        SELECT payload, payload_purged_at FROM webhook_events
+        WHERE id = ${fixture.eventId}::uuid`;
+      expect(event.payload_purged_at).toBeNull();
+      expect(event.payload.orderId).toBe('ord_retention_race');
+
+      receivedRequests = [];
+      serverResponseStatus = 200;
+      await deliveryWorker.poll();
+      expect(receivedRequests).toHaveLength(1);
+      expect(JSON.parse(receivedRequests[0].body).data.orderId).toBe('ord_retention_race');
+    });
   });
 
   it('should send test event to endpoint', async () => {

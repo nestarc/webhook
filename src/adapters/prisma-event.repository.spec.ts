@@ -19,6 +19,27 @@ describe('PrismaEventRepository', () => {
       expect(sql).not.toContain('tenantId}::uuid');
       expect(sql).not.toContain('::uuid');
       expect(prisma.$queryRaw.mock.calls[0]).toContain('tenant_123');
+      expect(prisma.$queryRaw.mock.calls[0].slice(1)).toEqual([
+        'order.created', JSON.stringify({ orderId: 'ord-1' }), 'tenant_123', null,
+      ]);
+    });
+
+    it('persists correlation metadata without an idempotency key', async () => {
+      const prisma = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: 'event-correlated' }]),
+      };
+      const repo = new PrismaEventRepository(prisma);
+
+      await expect(repo.saveEvent(
+        'order.created', { orderId: 'ord-1' }, null, { correlationId: 'req-1' },
+      )).resolves.toBe('event-correlated');
+
+      const [template, ...values] = prisma.$queryRaw.mock.calls[0];
+      expect((template as TemplateStringsArray).join(' '))
+        .toContain('(event_type, payload, tenant_id, correlation_id)');
+      expect(values).toEqual([
+        'order.created', JSON.stringify({ orderId: 'ord-1' }), null, 'req-1',
+      ]);
     });
   });
 
@@ -45,6 +66,30 @@ describe('PrismaEventRepository', () => {
       expect(sql).not.toContain('tenantId}::uuid');
       expect(sql).not.toContain('::uuid');
       expect(tx.$queryRaw.mock.calls[0]).toContain('tenant_123');
+      expect(tx.$queryRaw.mock.calls[0].slice(1)).toEqual([
+        'order.paid', JSON.stringify({ orderId: 'ord-1' }), 'tenant_123', null,
+      ]);
+    });
+
+    it('persists correlation metadata without an idempotency key inside the supplied transaction', async () => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: 'event-correlated' }]),
+      };
+      const prisma = { $queryRaw: jest.fn() };
+      const repo = new PrismaEventRepository(prisma);
+
+      await expect(repo.saveEventInTransaction(
+        tx, 'order.paid', { orderId: 'ord-1' }, 'tenant_123',
+        { correlationId: 'req-2' },
+      )).resolves.toBe('event-correlated');
+
+      const [template, ...values] = tx.$queryRaw.mock.calls[0];
+      expect((template as TemplateStringsArray).join(' '))
+        .toContain('(event_type, payload, tenant_id, correlation_id)');
+      expect(values).toEqual([
+        'order.paid', JSON.stringify({ orderId: 'ord-1' }), 'tenant_123', 'req-2',
+      ]);
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
     });
   });
 

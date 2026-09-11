@@ -1,5 +1,7 @@
 # Circuit Breaker Success Hot Row Fix Implementation Plan
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](../../usage.md) and installed package types.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop successful webhook deliveries from rewriting already-healthy endpoint rows, removing the endpoint hot-row lock bottleneck observed during worker scale-out.

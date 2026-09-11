@@ -14,6 +14,7 @@ import { WebhookUrlValidationReason } from '../webhook.url-validator';
 
 export interface DeliveryOptions {
   timeout?: number;
+  /** Total delivery attempts, including the first request. Default: 5 (four retries). */
   maxRetries?: number;
   /** @deprecated Retry backoff is currently fixed to the default exponential schedule. */
   backoff?: 'exponential';
@@ -21,7 +22,7 @@ export interface DeliveryOptions {
 }
 
 export interface WebhookPublishOptions {
-  /** Application-provided key used to deduplicate publish attempts. */
+  /** Deduplicates by tenant, event type, and key; a duplicate keeps the original event/payload and adds no deliveries. */
   idempotencyKey?: string;
   /** Optional caller correlation ID stored with the event for diagnostics. */
   correlationId?: string;

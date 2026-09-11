@@ -1,5 +1,7 @@
 # Early Delivery Failure Hooks Implementation Plan
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](../../usage.md) and installed package types.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add early delivery failure hooks for retry scheduling and endpoint degradation while preserving terminal-only `onDeliveryFailed` and active-to-inactive-only `onEndpointDisabled` semantics.

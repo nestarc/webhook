@@ -1,5 +1,7 @@
 # Worker Engine Capacity Improvement Design
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 Date: 2026-05-03
 
 ## Summary

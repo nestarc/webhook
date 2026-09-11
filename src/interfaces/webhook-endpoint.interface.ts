@@ -14,7 +14,7 @@ export interface EndpointRecord {
   updatedAt: Date;
 }
 
-/** Internal record that includes the signing secret. Only used for endpoint creation response and delivery enrichment. */
+/** Provisioning response returned by endpoint creation/rotation, including the new signing secret. Read APIs omit it. */
 export interface EndpointRecordWithSecret extends EndpointRecord {
   secret: string;
 }
@@ -42,6 +42,6 @@ export interface UpdateEndpointDto {
 export interface RotateEndpointSecretDto {
   /** Pass `'auto'` or omit the field to generate a secure base64 signing secret. */
   secret?: string;
-  /** Keep the previous secret valid until this timestamp so queued receivers can overlap during rotation. */
+  /** Include the previous secret in deliveries queued before this future timestamp. Existing queued snapshots are not expired or rewritten. */
   previousSecretExpiresAt: Date;
 }

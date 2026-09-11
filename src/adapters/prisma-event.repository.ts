@@ -13,10 +13,11 @@ export class PrismaEventRepository implements WebhookEventRepository {
     eventType: string,
     payload: Record<string, unknown>,
     tenantId: string | null,
+    options?: Pick<WebhookPublishOptions, 'correlationId'>,
   ): Promise<string> {
     const [saved] = await this.prisma.$queryRaw<{ id: string }[]>`
-      INSERT INTO webhook_events (event_type, payload, tenant_id)
-      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId})
+      INSERT INTO webhook_events (event_type, payload, tenant_id, correlation_id)
+      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId}, ${options?.correlationId ?? null})
       RETURNING id`;
     return saved.id;
   }
@@ -26,10 +27,11 @@ export class PrismaEventRepository implements WebhookEventRepository {
     eventType: string,
     payload: Record<string, unknown>,
     tenantId: string | null,
+    options?: Pick<WebhookPublishOptions, 'correlationId'>,
   ): Promise<string> {
     const [saved] = await tx.$queryRaw<{ id: string }[]>`
-      INSERT INTO webhook_events (event_type, payload, tenant_id)
-      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId})
+      INSERT INTO webhook_events (event_type, payload, tenant_id, correlation_id)
+      VALUES (${eventType}, ${JSON.stringify(payload)}::jsonb, ${tenantId}, ${options?.correlationId ?? null})
       RETURNING id`;
     return saved.id;
   }

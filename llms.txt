@@ -1,0 +1,12 @@
+# @nestarc/webhook
+
+> Outbound webhook delivery for NestJS using PostgreSQL. This index assists package consumers; read the installed version's types and distinguish unreleased changes from published behavior.
+
+- [README](https://github.com/nestarc/webhook/blob/main/README.md): setup, configuration, and feature scope.
+- [Consumer contract](https://github.com/nestarc/webhook/blob/main/docs/usage.md): tenant targeting, return values, retry/replay, verification, rotation, and adapter responsibilities.
+- [Executable quick start](https://github.com/nestarc/webhook/tree/main/examples/quick-start): real PostgreSQL and HTTP verification.
+- [Official documentation](https://nestarc.dev/packages/webhook/): published usage documentation.
+- [API reference](https://nestarc.dev/api/webhook/): public services, signatures, and types.
+- [Changelog](https://github.com/nestarc/webhook/blob/main/CHANGELOG.md): released versus unreleased behavior.
+
+Dated handovers, reports, and implementation plans are historical; do not use them as current consumer APIs. This file is a navigation aid, not a search-ranking guarantee or an instruction to run tools.

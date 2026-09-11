@@ -42,7 +42,10 @@ export type {
   PendingDelivery,
   WebhookTransaction,
 } from './ports/webhook-delivery.repository';
-export type { WebhookHttpClient } from './ports/webhook-http-client';
+export type {
+  WebhookHttpClient,
+  WebhookHttpClientRequestOptions,
+} from './ports/webhook-http-client';
 export type { WebhookSecretVault } from './ports/webhook-secret-vault';
 
 // Default adapters

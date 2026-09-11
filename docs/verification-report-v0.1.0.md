@@ -1,5 +1,7 @@
 # v0.1.0 Verification Report
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 작성일: 2026-04-11
 검증 대상: `@nestarc/webhook` v`0.1.0`
 검증 환경: Node.js `v24.11.1`, 로컬 Docker PostgreSQL(`postgres:16-alpine`)

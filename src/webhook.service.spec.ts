@@ -6,6 +6,7 @@ import {
   WebhookDeliveryRepository,
 } from './ports/webhook-delivery.repository';
 import { EndpointRecord } from './interfaces/webhook-endpoint.interface';
+import { WebhookPublishOptions } from './interfaces/webhook-options.interface';
 
 class TestEvent extends WebhookEvent {
   static readonly eventType = 'test.created';
@@ -91,6 +92,7 @@ describe('WebhookService', () => {
         'test.created',
         { testId: 't1' },
         null,
+        undefined,
       );
       expect(endpointRepo.findMatchingEndpointsInTransaction).toHaveBeenCalledWith(
         'fake-tx',
@@ -249,6 +251,7 @@ describe('WebhookService', () => {
         'test.created',
         { testId: 'redacted' },
         null,
+        undefined,
       );
     });
   });
@@ -269,6 +272,7 @@ describe('WebhookService', () => {
         'test.created',
         { testId: 't3' },
         'tenant-1',
+        undefined,
       );
       expect(endpointRepo.findMatchingEndpointsInTransaction).toHaveBeenCalledWith(
         'fake-tx',
@@ -289,6 +293,7 @@ describe('WebhookService', () => {
         'test.created',
         { testId: 't4' },
         null,
+        undefined,
       );
       expect(endpointRepo.findMatchingEndpointsInTransaction).toHaveBeenCalledWith(
         'fake-tx',
@@ -316,6 +321,7 @@ describe('WebhookService', () => {
         'test.created',
         { testId: 't5' },
         'tenant-1',
+        undefined,
       );
       // Should NOT call findMatchingEndpointsInTransaction
       expect(endpointRepo.findMatchingEndpointsInTransaction).not.toHaveBeenCalled();
@@ -349,7 +355,90 @@ describe('WebhookService', () => {
         'test.created',
         { testId: 't7' },
         null,
+        undefined,
       );
+    });
+  });
+
+  describe.each([
+    {
+      name: 'send',
+      tenantId: null,
+      publish: (service: WebhookService, options: WebhookPublishOptions) =>
+        service.send(new TestEvent('correlated'), options),
+    },
+    {
+      name: 'sendToTenant',
+      tenantId: 'tenant-1',
+      publish: (service: WebhookService, options: WebhookPublishOptions) =>
+        service.sendToTenant('tenant-1', new TestEvent('correlated'), options),
+    },
+    {
+      name: 'sendToEndpoints with options as the third argument',
+      tenantId: null,
+      publish: (service: WebhookService, options: WebhookPublishOptions) =>
+        service.sendToEndpoints(['ep-1'], new TestEvent('correlated'), options),
+    },
+    {
+      name: 'sendToEndpoints with tenant and options',
+      tenantId: 'tenant-1',
+      publish: (service: WebhookService, options: WebhookPublishOptions) =>
+        service.sendToEndpoints(
+          ['ep-1'], new TestEvent('correlated'), 'tenant-1', options,
+        ),
+    },
+  ])('$name correlation metadata', ({ publish, tenantId }) => {
+    it('persists correlationId without deduplicating events when no idempotencyKey is supplied', async () => {
+      eventRepo.saveEventInTransaction
+        .mockResolvedValueOnce('evt-first')
+        .mockResolvedValueOnce('evt-second');
+      endpointRepo.findMatchingEndpointsInTransaction.mockResolvedValue([
+        makeEndpoint({ id: 'ep-1' }),
+      ]);
+
+      await expect(publish(service, { correlationId: 'req-shared' }))
+        .resolves.toBe('evt-first');
+      await expect(publish(service, { correlationId: 'req-shared' }))
+        .resolves.toBe('evt-second');
+
+      expect(eventRepo.saveEventInTransaction).toHaveBeenCalledTimes(2);
+      expect(eventRepo.saveEventInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 'correlated' },
+        tenantId,
+        { correlationId: 'req-shared' },
+      );
+      expect(eventRepo.saveEventOnceInTransaction).not.toHaveBeenCalled();
+      expect(deliveryRepo.createDeliveriesInTransaction).toHaveBeenNthCalledWith(
+        1, 'fake-tx', 'evt-first', ['ep-1'], 5,
+      );
+      expect(deliveryRepo.createDeliveriesInTransaction).toHaveBeenNthCalledWith(
+        2, 'fake-tx', 'evt-second', ['ep-1'], 5,
+      );
+    });
+
+    it('continues to return the original event without deliveries for duplicate keys', async () => {
+      eventRepo.saveEventOnceInTransaction.mockResolvedValue({
+        id: 'evt-existing',
+        created: false,
+      });
+
+      await expect(publish(service, {
+        idempotencyKey: 'same-event',
+        correlationId: 'req-new',
+      })).resolves.toBe('evt-existing');
+
+      expect(eventRepo.saveEventOnceInTransaction).toHaveBeenCalledWith(
+        'fake-tx',
+        'test.created',
+        { testId: 'correlated' },
+        tenantId,
+        { idempotencyKey: 'same-event', correlationId: 'req-new' },
+      );
+      expect(eventRepo.saveEventInTransaction).not.toHaveBeenCalled();
+      expect(endpointRepo.findMatchingEndpointsInTransaction).not.toHaveBeenCalled();
+      expect(deliveryRepo.createDeliveriesInTransaction).not.toHaveBeenCalled();
     });
   });
 });

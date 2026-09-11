@@ -1,5 +1,7 @@
 # 제안: URL 검증 에러 클래스 도입
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 - **일자:** 2026-04-14
 - **제안 버전 타깃:** `@nestarc/webhook` v0.7.0 (minor, 비파괴적)
 - **제안자:** 소비자 프로젝트 (`webhook-platform`) API 코드 리뷰 과정에서 도출

@@ -3,6 +3,12 @@ import { join } from 'node:path';
 import { PrismaDeliveryRepository } from './prisma-delivery.repository';
 import { WebhookSecretVault } from '../ports/webhook-secret-vault';
 
+function transactionalPrisma<T>(tx: T) {
+  return {
+    $transaction: jest.fn(async (callback: (client: T) => Promise<unknown>) => callback(tx)),
+  };
+}
+
 describe('PrismaDeliveryRepository', () => {
   describe('createDeliveriesInTransaction', () => {
     it('binds selected endpoint ids to the persisted event tenant and event type', async () => {
@@ -286,22 +292,53 @@ describe('PrismaDeliveryRepository', () => {
 
   describe('retryDelivery', () => {
     it('requeues failed deliveries and grants one additional manual attempt', async () => {
-      const prisma = {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: 'event-1' }]),
         $executeRaw: jest.fn().mockResolvedValue(1),
       };
+      const prisma = transactionalPrisma(tx);
       const repo = new PrismaDeliveryRepository(prisma);
 
       await expect(
         repo.retryDelivery('delivery-1', { reason: 'customer requested replay' }),
       ).resolves.toBe(true);
 
-      const sql = (prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray)
+      const sql = (tx.$executeRaw.mock.calls[0][0] as TemplateStringsArray)
         .join(' ')
         .replace(/\s+/g, ' ');
       expect(sql).toContain("status = 'PENDING'");
       expect(sql).toContain('next_attempt_at = NOW()');
-      expect(sql).toContain('max_attempts = GREATEST(max_attempts, attempts + 1)');
+      expect(sql).toContain('max_attempts = GREATEST(d.max_attempts, d.attempts + 1)');
       expect(sql).toContain("status = 'FAILED'");
+      expect(sql).toContain('ev.payload_purged_at IS NULL');
+      expect((tx.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join(' '))
+        .toContain('FOR UPDATE OF ev');
+      expect(tx.$queryRaw.mock.invocationCallOrder[0])
+        .toBeLessThan(tx.$executeRaw.mock.invocationCallOrder[0]);
+      expect(prisma.$transaction).toHaveBeenCalledWith(
+        expect.any(Function), { isolationLevel: 'ReadCommitted' },
+      );
+    });
+
+    it('returns false when no retained failed delivery can be retried', async () => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: 'event-1' }]),
+        $executeRaw: jest.fn().mockResolvedValue(0),
+      };
+      const repo = new PrismaDeliveryRepository(transactionalPrisma(tx));
+
+      await expect(repo.retryDelivery('delivery-1')).resolves.toBe(false);
+    });
+
+    it('does not update a delivery when its event could not be locked', async () => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        $executeRaw: jest.fn(),
+      };
+      const repo = new PrismaDeliveryRepository(transactionalPrisma(tx));
+
+      await expect(repo.retryDelivery('missing-delivery')).resolves.toBe(false);
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
     });
   });
 
@@ -341,8 +378,8 @@ describe('PrismaDeliveryRepository', () => {
 
   describe('purgeExpiredData', () => {
     it('purges expired payload and response body data and returns normalized counts', async () => {
-      const prisma = {
-        $queryRaw: jest.fn().mockResolvedValue([
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValueOnce([{ id: 'event-1' }]).mockResolvedValueOnce([
           {
             eventsPurged: BigInt(1),
             deliveriesPurged: '2',
@@ -350,6 +387,7 @@ describe('PrismaDeliveryRepository', () => {
           },
         ]),
       };
+      const prisma = transactionalPrisma(tx);
       const repo = new PrismaDeliveryRepository(prisma);
       const now = new Date('2026-06-23T00:00:00.000Z');
 
@@ -368,7 +406,9 @@ describe('PrismaDeliveryRepository', () => {
         attemptsPurged: 3,
       });
 
-      const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray)
+      const lockSql = (tx.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join(' ');
+      expect(lockSql).toContain('FOR UPDATE OF ev SKIP LOCKED');
+      const sql = (tx.$queryRaw.mock.calls[1][0] as TemplateStringsArray)
         .join(' ')
         .replace(/\s+/g, ' ');
       expect(sql).toContain("payload = '{}'::jsonb");
@@ -376,13 +416,32 @@ describe('PrismaDeliveryRepository', () => {
       expect(sql.match(/::timestamptz/g)).toHaveLength(3);
       expect(sql).toContain("status IN ('PENDING', 'SENDING')");
       expect(sql).toContain('response_body = NULL');
+      expect(sql).toContain('ev.id = ANY(');
+      expect(tx.$queryRaw.mock.calls[1]).toContainEqual(['event-1']);
+      expect(prisma.$transaction).toHaveBeenCalledWith(
+        expect.any(Function), { isolationLevel: 'ReadCommitted' },
+      );
+    });
+
+    it('does not acquire event locks when only response body retention is enabled', async () => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValueOnce([
+          { eventsPurged: 0, deliveriesPurged: 1, attemptsPurged: 0 },
+        ]),
+      };
+      const repo = new PrismaDeliveryRepository(transactionalPrisma(tx));
+
+      await expect(repo.purgeExpiredData({ deliveryResponseBodyRetentionDays: 7 }))
+        .resolves.toEqual({ eventsPurged: 0, deliveriesPurged: 1, attemptsPurged: 0 });
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(tx.$queryRaw.mock.calls[0]).toContainEqual([]);
     });
   });
 
   describe('retryFailedDeliveries', () => {
     it('defaults bulk retry to a bounded limit and returns normalized counts', async () => {
-      const prisma = {
-        $queryRawUnsafe: jest.fn().mockResolvedValue([
+      const tx = {
+        $queryRawUnsafe: jest.fn().mockResolvedValueOnce([{ id: 'event-1' }]).mockResolvedValueOnce([
           {
             matched: BigInt(3),
             retried: '2',
@@ -390,6 +449,7 @@ describe('PrismaDeliveryRepository', () => {
           },
         ]),
       };
+      const prisma = transactionalPrisma(tx);
       const repo = new PrismaDeliveryRepository(prisma);
 
       await expect(
@@ -400,13 +460,22 @@ describe('PrismaDeliveryRepository', () => {
         }),
       ).resolves.toEqual({ matched: 3, retried: 2, skipped: 1 });
 
-      const [query, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+      const [lockQuery] = tx.$queryRawUnsafe.mock.calls[0];
+      expect(lockQuery).toContain('ORDER BY ev.id');
+      expect(lockQuery).toContain('FOR UPDATE OF ev SKIP LOCKED');
+      const [query, ...values] = tx.$queryRawUnsafe.mock.calls[1];
       expect(query).toContain("d.status = 'FAILED'");
       expect(query).toContain('LIMIT $');
       expect(query).toContain('max_attempts = GREATEST(max_attempts, attempts + 1)');
       expect(values).toContain('endpoint-1');
       expect(values).toContain('order.created');
       expect(values).toContain(100);
+      expect(values).toContainEqual(['event-1']);
+      expect(query).toContain('SELECT id FROM candidates WHERE payload_purged_at IS NULL');
+      expect(query).toContain('FOR UPDATE OF d SKIP LOCKED');
+      expect(prisma.$transaction).toHaveBeenCalledWith(
+        expect.any(Function), { isolationLevel: 'ReadCommitted' },
+      );
     });
 
     it('rejects unsafe bulk retry limits', async () => {
@@ -420,8 +489,8 @@ describe('PrismaDeliveryRepository', () => {
 
   describe('replayEvent', () => {
     it('creates replay deliveries for active endpoints using current endpoint snapshots', async () => {
-      const prisma = {
-        $queryRaw: jest.fn().mockResolvedValue([
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValueOnce([{ id: 'event-1' }]).mockResolvedValueOnce([
           {
             eventId: 'event-1',
             sourceEventCount: 1,
@@ -430,6 +499,7 @@ describe('PrismaDeliveryRepository', () => {
           },
         ]),
       };
+      const prisma = transactionalPrisma(tx);
       const repo = new PrismaDeliveryRepository(prisma);
 
       await expect(
@@ -444,7 +514,9 @@ describe('PrismaDeliveryRepository', () => {
         endpointIds: ['endpoint-1', 'endpoint-2'],
       });
 
-      const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray)
+      expect((tx.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join(' '))
+        .toContain('FOR UPDATE');
+      const sql = (tx.$queryRaw.mock.calls[1][0] as TemplateStringsArray)
         .join(' ')
         .replace(/\s+/g, ' ');
       expect(sql).toContain('payload_purged_at IS NULL');
@@ -454,6 +526,46 @@ describe('PrismaDeliveryRepository', () => {
       expect(sql).toContain('e.url');
       expect(sql).toContain('e.secret');
       expect(sql).toContain('array_agg');
+      expect(tx.$queryRaw.mock.calls[1]).toContain(5);
+      expect(prisma.$transaction).toHaveBeenCalledWith(
+        expect.any(Function), { isolationLevel: 'ReadCommitted' },
+      );
+    });
+
+    it('uses the supplied replay attempt budget', async () => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValueOnce([{ id: 'event-1' }]).mockResolvedValueOnce([
+          { eventId: 'event-1', sourceEventCount: 1, deliveriesCreated: 0, endpointIds: [] },
+        ]),
+      };
+      const repo = new PrismaDeliveryRepository(transactionalPrisma(tx));
+
+      await repo.replayEvent('event-1', undefined, 8);
+
+      expect(tx.$queryRaw.mock.calls[1]).toContain(8);
+    });
+
+    it('rejects replay when the event payload was purged', async () => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValueOnce([{ id: 'event-1' }]).mockResolvedValueOnce([
+          { eventId: 'event-1', sourceEventCount: 0, deliveriesCreated: 0, endpointIds: [] },
+        ]),
+      };
+      const repo = new PrismaDeliveryRepository(transactionalPrisma(tx));
+
+      await expect(repo.replayEvent('event-1')).rejects.toThrow(
+        'Webhook event is missing or its payload has been purged',
+      );
+    });
+
+    it('rejects replay without inserting when the event could not be locked', async () => {
+      const tx = { $queryRaw: jest.fn().mockResolvedValueOnce([]) };
+      const repo = new PrismaDeliveryRepository(transactionalPrisma(tx));
+
+      await expect(repo.replayEvent('missing-event')).rejects.toThrow(
+        'Webhook event is missing or its payload has been purged',
+      );
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
     });
   });
 

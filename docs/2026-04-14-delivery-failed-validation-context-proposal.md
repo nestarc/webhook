@@ -1,5 +1,7 @@
 ﻿# 제안: `onDeliveryFailed`에 URL validation reason 전파
 
+> **Historical development record — not a current usage guide.** APIs and assumptions below may be obsolete. Use the [current consumer contract](usage.md) and installed package types.
+
 - 날짜: 2026-04-14
 - 대상 버전: `@nestarc/webhook` 현재 main 기준, semver minor 제안
 - 제안 배경: `webhook-platform` worker 리뷰의 W2 후속 조치
