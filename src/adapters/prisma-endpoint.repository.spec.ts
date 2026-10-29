@@ -3,6 +3,38 @@ import { ENDPOINT_DISABLED_REASON_CONSECUTIVE_FAILURES_EXCEEDED } from '../webho
 
 describe('PrismaEndpointRepository', () => {
   describe('createEndpoint', () => {
+    it('stores ciphertext but returns the original provisioning secret without decrypting or mutating the stored row', async () => {
+      const storedEndpoint = Object.freeze({
+        id: 'endpoint-1',
+        secret: 'vault:ciphertext',
+        tenantId: 'tenant_123',
+      });
+      const prisma = { $queryRawUnsafe: jest.fn().mockResolvedValue([storedEndpoint]) };
+      const vault = {
+        encrypt: jest.fn().mockResolvedValue('vault:ciphertext'),
+        decrypt: jest.fn(),
+      };
+      const repo = new PrismaEndpointRepository(prisma, vault);
+
+      const result = await repo.createEndpoint({
+        url: 'https://example.com/hook',
+        events: ['order.created'],
+        secret: 'plain-provisioning-secret',
+        description: null,
+        metadata: null,
+        tenantId: 'tenant_123',
+      });
+
+      expect(prisma.$queryRawUnsafe.mock.calls[0][2]).toBe('vault:ciphertext');
+      expect(vault.encrypt).toHaveBeenCalledWith('plain-provisioning-secret');
+      expect(vault.decrypt).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        id: 'endpoint-1', tenantId: 'tenant_123', secret: 'plain-provisioning-secret',
+      });
+      expect(result).not.toBe(storedEndpoint);
+      expect(storedEndpoint.secret).toBe('vault:ciphertext');
+    });
+
     it('stores tenant IDs as opaque strings without UUID casts', async () => {
       const prisma = {
         $queryRawUnsafe: jest.fn().mockResolvedValue([

@@ -1,6 +1,7 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   WEBHOOK_DELIVERY_REPOSITORY,
@@ -12,6 +13,7 @@ import { WebhookAdminService } from '../../src/webhook.admin.service';
 import { WebhookDeliveryWorker } from '../../src/webhook.delivery-worker';
 import { WebhookEvent } from '../../src/webhook.event';
 import { WebhookSigner } from '../../src/webhook.signer';
+import { WebhookEndpointAdminService } from '../../src/webhook.endpoint-admin.service';
 import { PrismaDeliveryRepository } from '../../src/adapters/prisma-delivery.repository';
 
 class TestOrderEvent extends WebhookEvent {
@@ -196,7 +198,7 @@ describe('Webhook E2E', () => {
             cooldownMinutes: 1,
           },
           polling: {
-            interval: 60_000, // Don't auto-poll, we'll call manually
+            enabled: false, // Tests call poll manually, including with different vaults.
             batchSize: 10,
           },
           allowPrivateUrls: true, // E2E tests use localhost
@@ -983,4 +985,93 @@ describe('Webhook E2E', () => {
       signer.verify(eventId, timestamp, req.body, oldSecret, signatureHeader),
     ).toBe(true);
   });
+
+  it.each([undefined, 'auto', Buffer.alloc(32, 1).toString('base64')])(
+    'provisions the original %s secret with an encrypting vault and preserves encrypted queued snapshots',
+    async (secret) => {
+      const key = randomBytes(32);
+      const vault = {
+        async encrypt(value: string): Promise<string> {
+          const iv = randomBytes(12);
+          const cipher = createCipheriv('aes-256-gcm', key, iv);
+          const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+          return `gcm:${Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64')}`;
+        },
+        async decrypt(value: string): Promise<string> {
+          if (!value.startsWith('gcm:')) throw new Error('Expected encrypted signing material');
+          const bytes = Buffer.from(value.slice(4), 'base64');
+          const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
+          decipher.setAuthTag(bytes.subarray(12, 28));
+          return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8');
+        },
+      };
+      const encryptedModule = await Test.createTestingModule({
+        imports: [WebhookModule.forRoot({
+          prisma,
+          secretVault: vault,
+          polling: { enabled: false, batchSize: 10 },
+          allowPrivateUrls: true,
+        })],
+      }).compile();
+
+      try {
+        await encryptedModule.init();
+        const endpoints = encryptedModule.get(WebhookEndpointAdminService);
+        const publisher = encryptedModule.get(WebhookService);
+        const worker = encryptedModule.get(WebhookDeliveryWorker);
+        const endpoint = await endpoints.createEndpoint({
+          url: `http://localhost:${mockServerPort}/encrypted`,
+          events: ['order.created'], tenantId: 'encrypted-tenant', secret,
+        });
+        expect(Buffer.from(endpoint.secret, 'base64')).toHaveLength(32);
+        if (secret && secret !== 'auto') expect(endpoint.secret).toBe(secret);
+        expect(endpoint.tenantId).toBe('encrypted-tenant');
+        const [stored] = await prisma.$queryRaw<Array<{ secret: string }>>`
+          SELECT secret FROM webhook_endpoints WHERE id = ${endpoint.id}::uuid`;
+        expect(stored.secret).not.toBe(endpoint.secret);
+        expect(await vault.decrypt(stored.secret)).toBe(endpoint.secret);
+        expect(await endpoints.getEndpoint(endpoint.id)).not.toHaveProperty('secret');
+        expect((await endpoints.listEndpoints('encrypted-tenant'))[0]).not.toHaveProperty('secret');
+
+        const firstEvent = await publisher.sendToTenant('encrypted-tenant', new TestOrderEvent('before-rotation'));
+        const replacement = new WebhookSigner().generateSecret();
+        const rotated = await endpoints.rotateSecret(endpoint.id, {
+          secret: replacement, previousSecretExpiresAt: new Date(Date.now() + 60_000),
+        });
+        expect(rotated!.secret).toBe(replacement);
+        const [afterRotation] = await prisma.$queryRaw<Array<{ secret: string; previous_secret: string }>>`
+          SELECT secret, previous_secret FROM webhook_endpoints WHERE id = ${endpoint.id}::uuid`;
+        expect(afterRotation.secret).not.toBe(replacement);
+        expect(await vault.decrypt(afterRotation.secret)).toBe(replacement);
+        expect(afterRotation.previous_secret).toBe(stored.secret);
+        const secondEvent = await publisher.sendToTenant('encrypted-tenant', new TestOrderEvent('after-rotation'));
+        const snapshots = await prisma.$queryRaw<Array<{
+          event_id: string; signing_secret_snapshot: string; secondary_signing_secret_snapshot: string | null;
+        }>>`
+          SELECT event_id, signing_secret_snapshot, secondary_signing_secret_snapshot
+          FROM webhook_deliveries WHERE endpoint_id = ${endpoint.id}::uuid`;
+        expect(snapshots).toEqual(expect.arrayContaining([
+          { event_id: firstEvent, signing_secret_snapshot: stored.secret, secondary_signing_secret_snapshot: null },
+          { event_id: secondEvent, signing_secret_snapshot: afterRotation.secret, secondary_signing_secret_snapshot: stored.secret },
+        ]));
+        expect(snapshots).toHaveLength(2);
+
+        await worker.poll();
+        expect(receivedRequests).toHaveLength(2);
+        const signer = new WebhookSigner();
+        for (const eventId of [firstEvent, secondEvent]) {
+          const request = receivedRequests.find((item) => item.headers['webhook-id'] === eventId)!;
+          const timestamp = Number(request.headers['webhook-timestamp']);
+          const signature = request.headers['webhook-signature'] as string;
+          expect(signer.verify(eventId, timestamp, request.body, endpoint.secret, signature)).toBe(true);
+          expect(signer.verify(eventId, timestamp, request.body, replacement, signature)).toBe(eventId === secondEvent);
+        }
+        const readBack = await endpoints.getEndpoint(endpoint.id);
+        expect(readBack).not.toHaveProperty('secret');
+        expect(readBack).not.toHaveProperty('previousSecret');
+      } finally {
+        await encryptedModule.close();
+      }
+    },
+  );
 });

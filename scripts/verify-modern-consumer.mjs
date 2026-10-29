@@ -175,6 +175,12 @@ assert.equal(typeof webhook.WebhookService, 'function');
   );
   run(process.execPath, ['runtime.cjs'], consumerRoot);
 
+  writeFileSync(
+    join(consumerRoot, 'provisioning-secret.cjs'),
+    readFileSync(join(repositoryRoot, 'scripts/fixtures/provisioning-secret.cjs'), 'utf8'),
+  );
+  run(process.execPath, ['provisioning-secret.cjs'], consumerRoot);
+
   const tree = JSON.parse(run('npm', ['ls', '--depth=0', '--json'], consumerRoot));
   const expected = {
     '@nestarc/webhook': sourceManifest.version,

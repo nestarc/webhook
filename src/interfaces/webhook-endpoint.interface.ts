@@ -14,7 +14,7 @@ export interface EndpointRecord {
   updatedAt: Date;
 }
 
-/** Provisioning response returned by endpoint creation/rotation, including the new signing secret. Read APIs omit it. */
+/** Provisioning response with the new plaintext signing secret, even with an encryption vault. Read APIs omit it. */
 export interface EndpointRecordWithSecret extends EndpointRecord {
   secret: string;
 }

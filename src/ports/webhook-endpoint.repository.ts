@@ -31,6 +31,7 @@ export interface WebhookEndpointRepository {
     tenantId: string | undefined,
   ): Promise<EndpointRecord[]>;
 
+  /** Persist through the configured vault and return the original input.secret for provisioning. */
   createEndpoint(input: ResolvedCreateEndpointInput): Promise<EndpointRecordWithSecret>;
 
   getEndpoint(id: string): Promise<EndpointRecord | null>;

@@ -6,7 +6,7 @@ Send signed webhook events from a NestJS application using PostgreSQL as the del
 
 [Documentation](https://nestarc.dev/packages/webhook/) · [API Reference](https://nestarc.dev/api/webhook/) · [npm](https://www.npmjs.com/package/@nestarc/webhook) · [Changelog](./CHANGELOG.md) · [Security policy](./SECURITY.md)
 
-> **Version scope:** This README describes `0.13.2`; see its [changes](./CHANGELOG.md#0132---2026-09-11). If that version is not yet available on npm, use a locally packed build from this checkout. Before `1.0.0`, minor releases may contain breaking changes; review the changelog and pin exact versions.
+> **Version scope:** This README targets `0.13.3`; see its [changes](./CHANGELOG.md#0133---2026-10-29). The endpoint-secret provisioning fix requires that version and is not included in `0.13.2`. Before `1.0.0`, minor releases may contain breaking changes; review the changelog and pin exact versions.
 
 ## Contents
 
@@ -38,10 +38,10 @@ Send signed webhook events from a NestJS application using PostgreSQL as the del
 
 You need an existing NestJS application, a PostgreSQL database, and a running API process or separate delivery worker. The package supports Node.js 20+, NestJS 10 or 11, `@nestjs/schedule` 4 or 5, and Prisma Client 5, 6, or 7. Respect the stricter requirements of your selected dependencies: Prisma 7.10.0 requires Node.js `^20.19`, `^22.12`, or `>=24.0` and TypeScript 5.4+.
 
-Install the package into your application:
+Install the matching package into your application. For repository development, use [packed-source verification](./examples/quick-start/README.md#verify-the-repository-build) to exercise local changes:
 
 ```bash
-npm install --save-exact @nestarc/webhook@0.13.2
+npm install --save-exact @nestarc/webhook@0.13.3
 ```
 
 Keep existing compatible NestJS and Prisma dependencies. For a NestJS 11 / Prisma 7 setup, the following exact versions are covered by the repository's compatibility checks:
@@ -189,15 +189,22 @@ Each subclass must define `static readonly eventType`; publishing throws if it i
 Inject `WebhookEndpointAdminService` into your application's endpoint-registration service and call:
 
 ```typescript
+import { WebhookSigner } from '@nestarc/webhook';
+
+const signingSecret = new WebhookSigner().generateSecret();
 const endpoint = await endpointAdmin.createEndpoint({
   url: 'https://customer.com/webhooks', // Replace with your receiver URL.
   events: ['order.created'],          // Use ['*'] to subscribe to every event type.
   tenantId: 'tenant_123',
-  secret: 'auto',                     // Omit for the same automatic generation.
+  secret: signingSecret,
 });
+
+// Securely provision signingSecret to the receiver after creation succeeds.
 ```
 
-Provision `endpoint.secret` to the receiver through your application's secure setup flow, then publish. Signing secrets are returned by creation and rotation; list/get APIs omit them. `tenantId` is optional and is stored as `null` when omitted.
+Provision the original `signingSecret` through your application's secure setup flow, then publish. In `0.13.3`, creation also returns the original signing key in `endpoint.secret`, including when it is generated with `'auto'` or an omitted `secret`. Rotation returns the original new key, and list/get APIs omit signing secrets. `tenantId` is optional and is stored as `null` when omitted.
+
+**For `0.13.2` consumers:** the default Prisma repository returns stored ciphertext in `endpoint.secret` when an encrypting vault is configured. The explicit-key pattern above works around that issue: provision the original `signingSecret` after creation succeeds.
 
 ### 4. Publish and check delivery
 
@@ -497,7 +504,7 @@ const valid = signer.verifyWithTolerance(
 
 ### Secrets and rotation
 
-- `createEndpoint()` and `rotateSecret()` return the new signing secret. `listEndpoints()` and `getEndpoint()` omit it.
+- From `0.13.3`, `createEndpoint()` returns the original new signing secret for receiver provisioning, matching `rotateSecret()`. In `0.13.2`, creation with the default Prisma repository and an encrypting vault instead returns stored ciphertext; use the [explicit-key quick start](#3-register-the-receiver-before-publishing) on that release. `listEndpoints()` / `getEndpoint()` omit signing secrets.
 - The default `PlaintextSecretVault` stores secrets without encryption. Provide a `WebhookSecretVault` for encryption at rest; queue snapshots also contain signing material.
 - Normal delivery rows snapshot the endpoint URL and current secret when queued. Retries keep these values after endpoint changes.
 - Legacy rows created before `0.9.0` with null snapshots fall back to the endpoint's live URL/current key.

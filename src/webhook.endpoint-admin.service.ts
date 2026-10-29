@@ -55,7 +55,7 @@ export class WebhookEndpointAdminService {
     });
 
     this.logger.log(`Endpoint created: ${endpoint.id} → ${dto.url}`);
-    return endpoint;
+    return { ...endpoint, secret };
   }
 
   async listEndpoints(tenantId?: string): Promise<EndpointRecord[]> {

@@ -2,6 +2,8 @@
 
 > Outbound webhook delivery for NestJS using PostgreSQL. This index assists package consumers; read the installed version's types and distinguish unreleased changes from published behavior.
 
+This checkout documents version 0.13.3. Its endpoint-secret provisioning fix is absent from 0.13.2: creation with an encrypting vault returns the original signing key from 0.13.3. Check the installed version before relying on that contract; use packed-source verification for repository development.
+
 - [README](https://github.com/nestarc/webhook/blob/main/README.md): setup, configuration, and feature scope.
 - [Consumer contract](https://github.com/nestarc/webhook/blob/main/docs/usage.md): tenant targeting, return values, retry/replay, verification, rotation, and adapter responsibilities.
 - [Executable quick start](https://github.com/nestarc/webhook/tree/main/examples/quick-start): real PostgreSQL and HTTP verification.

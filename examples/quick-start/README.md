@@ -8,8 +8,8 @@ the persisted `SENT` delivery and its attempt log.
 
 ## Run
 
-This example targets `@nestarc/webhook@0.13.2`. Before that version is available
-on npm, use the [packed-source verification](#verify-the-repository-build) below.
+This example targets `@nestarc/webhook@0.13.3`. For repository development,
+verify local changes with the [packed-source verification](#verify-the-repository-build) below.
 
 Use Node.js **20.19+, 22.12+, or 24+** (the supported Prisma 7 release lines) and
 PostgreSQL **14+**. The database user needs permission to create schemas. Use a

@@ -105,7 +105,9 @@ export class PrismaEndpointRepository implements WebhookEndpointRepository {
       input.metadata ? JSON.stringify(input.metadata) : null,
       input.tenantId,
     );
-    return endpoint;
+    // The INSERT response contains the storage representation. Provision the
+    // original signing key without decrypting or changing the stored row.
+    return { ...endpoint, secret: input.secret };
   }
 
   async getEndpoint(id: string): Promise<EndpointRecord | null> {

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-10-29
+
+### Fixed
+
+- Return the original signing secret from endpoint creation when an encrypting `WebhookSecretVault` is configured. The Prisma repository and endpoint admin response no longer expose stored ciphertext as the provisioning key; automatically generated and explicitly supplied secrets follow the same contract as rotation. Storage encryption, read API redaction, tenant filters, and queued delivery snapshots are unchanged. Consumers remaining on `0.13.2` can generate the key before creation, pass it explicitly, and provision the original value.
+
 ## [0.13.2] - 2026-09-11
 
 ### Fixed
@@ -421,7 +427,9 @@ Workers scale horizontally thanks to `FOR UPDATE SKIP LOCKED`. No Redis or messa
 - PostgreSQL migration SQL for 3 tables.
 - Base64 secret validation (minimum 16 bytes).
 
-[Unreleased]: https://github.com/nestarc/webhook/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/nestarc/webhook/compare/v0.13.3...HEAD
+[0.13.3]: https://github.com/nestarc/webhook/compare/v0.13.2...v0.13.3
+[0.13.2]: https://github.com/nestarc/webhook/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/nestarc/webhook/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/nestarc/webhook/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/nestarc/webhook/compare/v0.12.0...v0.12.1

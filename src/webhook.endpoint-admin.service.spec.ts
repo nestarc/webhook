@@ -46,29 +46,33 @@ describe('WebhookEndpointAdminService', () => {
   });
 
   describe('createEndpoint', () => {
-    it('should auto-generate secret when "auto"', async () => {
-      mocks.endpointRepo.createEndpoint.mockResolvedValueOnce({ ...makeEndpoint(), secret: 'auto-generated' });
+    it.each([undefined, 'auto'])('returns the generated secret for %s even if a repository returns ciphertext', async (secret) => {
+      const stored = Object.freeze({ ...makeEndpoint(), secret: 'vault:ciphertext' });
+      mocks.endpointRepo.createEndpoint.mockResolvedValueOnce(stored);
 
-      await service.createEndpoint({
-        url: 'https://1.1.1.1', events: ['*'], secret: 'auto',
+      const result = await service.createEndpoint({
+        url: 'https://1.1.1.1', events: ['*'], secret,
       });
 
       // Secret arg should be a base64 string (auto-generated)
       const secretArg = mocks.endpointRepo.createEndpoint.mock.calls[0][0].secret;
       expect(Buffer.from(secretArg, 'base64').length).toBe(32);
+      expect(result.secret).toBe(secretArg);
+      expect(stored.secret).toBe('vault:ciphertext');
     });
 
     it('should use provided valid secret', async () => {
       const validSecret = Buffer.from('a'.repeat(32)).toString('base64');
       mocks.endpointRepo.createEndpoint.mockResolvedValueOnce(
-        { ...makeEndpoint(), secret: validSecret },
+        { ...makeEndpoint(), secret: 'vault:ciphertext' },
       );
 
-      await service.createEndpoint({
+      const result = await service.createEndpoint({
         url: 'https://1.1.1.1', events: ['*'], secret: validSecret,
       });
 
       expect(mocks.endpointRepo.createEndpoint.mock.calls[0][0].secret).toBe(validSecret);
+      expect(result.secret).toBe(validSecret);
     });
 
     it('should reject invalid base64 secret', async () => {
