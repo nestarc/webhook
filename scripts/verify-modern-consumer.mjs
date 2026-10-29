@@ -64,7 +64,7 @@ try {
 
   const packedFiles = new Set(packedArtifact.files.map(({ path }) => path));
   for (const required of [
-    'README.md', 'CHANGELOG.md', 'SECURITY.md', 'LICENSE', 'docs/usage.md', 'llms.txt',
+    'README.md', 'CHANGELOG.md', 'SECURITY.md', 'LICENSE', 'USAGE.md', 'llms.txt',
     'examples/quick-start/README.md', 'examples/quick-start/package.json',
     'src/sql/create-webhook-tables.sql', 'src/sql/migrations/v0.9.0.sql',
     'src/sql/migrations/v0.12.0.sql', 'src/sql/migrations/v0.13.0.sql', 'dist/index.d.ts',

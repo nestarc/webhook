@@ -4,6 +4,9 @@
 # Build output
 dist/
 
+# Local development notes and historical reports
+/docs/
+
 # Logs
 logs
 *.log

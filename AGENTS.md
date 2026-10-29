@@ -1,6 +1,6 @@
 # Working on @nestarc/webhook
 
-For **using** the package, read [README.md](./README.md), [docs/usage.md](./docs/usage.md), and the types in the installed package. The [quick start](./examples/quick-start/README.md) is the executable consumer example. Dated development reports are historical, not API contracts.
+For **using** the package, read [README.md](./README.md), [USAGE.md](./USAGE.md), and the types in the installed package. The [quick start](./examples/quick-start/README.md) is the executable consumer example. Dated development reports are historical, not API contracts.
 
 For **maintaining** this repository:
 

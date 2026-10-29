@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Keep `docs/` as untracked local development notes. The consumer guide moves from `docs/usage.md` to root-level `USAGE.md` in source and future package builds; published releases retain their original layout.
+- Disable scheduled Dependabot version updates by removing the repository configuration.
+
 ## [0.13.3] - 2026-10-29
 
 ### Fixed

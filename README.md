@@ -268,7 +268,7 @@ Delivery uses retries with a finite attempt budget. `FOR UPDATE SKIP LOCKED` pre
 
 ## API reference
 
-See the [full API reference](https://nestarc.dev/api/webhook/) and [consumer guide](./docs/usage.md) for type definitions, return values, errors, and operational examples. The installed package includes TypeScript declarations under `dist/`.
+See the [full API reference](https://nestarc.dev/api/webhook/) and [consumer guide](./USAGE.md) for type definitions, return values, errors, and operational examples. The installed package includes TypeScript declarations under `dist/`.
 
 | Service | Methods |
 |---|---|
@@ -384,7 +384,7 @@ WebhookModule.forRoot({
 });
 ```
 
-When replacing only some repositories, also provide `prisma` for the remaining defaults. Custom repositories must share compatible transaction semantics. Optional capabilities such as idempotent persistence, bulk retry, replay, retention, and backlog reporting require the corresponding port methods; check the [consumer guide](./docs/usage.md) before replacing an adapter.
+When replacing only some repositories, also provide `prisma` for the remaining defaults. Custom repositories must share compatible transaction semantics. Optional capabilities such as idempotent persistence, bulk retry, replay, retention, and backlog reporting require the corresponding port methods; check the [consumer guide](./USAGE.md) before replacing an adapter.
 
 ### Async configuration
 
@@ -586,7 +586,7 @@ On application close, a worker waits up to 30 seconds for its active poll and in
 
 ## Using this package with an AI agent
 
-Start with the [package navigation index](./llms.txt), [consumer guide](./docs/usage.md), [executable quick start](./examples/quick-start/README.md), and installed `dist/index.d.ts`. Confirm the installed package version against the [changelog](./CHANGELOG.md) before using an API or an Unreleased fix. For hosted reference material, use the [package documentation](https://nestarc.dev/packages/webhook/), [API reference](https://nestarc.dev/api/webhook/), and site [llms.txt](https://nestarc.dev/llms.txt).
+Start with the [package navigation index](./llms.txt), [consumer guide](./USAGE.md), [executable quick start](./examples/quick-start/README.md), and installed `dist/index.d.ts`. Confirm the installed package version against the [changelog](./CHANGELOG.md) before using an API or an Unreleased fix. For hosted reference material, use the [package documentation](https://nestarc.dev/packages/webhook/), [API reference](https://nestarc.dev/api/webhook/), and site [llms.txt](https://nestarc.dev/llms.txt).
 
 Historical design and handover documents describe earlier implementations; use the consumer guide and current public types for application code. Treat tenant scope, raw-body verification, receiver deduplication, and finite retry budgets as part of the usage contract. An agent can validate integration by running the quick-start consumer against a disposable PostgreSQL database.
 

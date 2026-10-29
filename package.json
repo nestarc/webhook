@@ -15,7 +15,7 @@
     "src/sql",
     "CHANGELOG.md",
     "SECURITY.md",
-    "docs/usage.md",
+    "USAGE.md",
     "examples/quick-start",
     "llms.txt"
   ],
